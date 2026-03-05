@@ -23,3 +23,9 @@ go.work.sum
 
 # env file
 .env
+
+# ffsync local config and state
+.ffsync
+.ffsync.lock
+.ffsync-state
+*.lock
