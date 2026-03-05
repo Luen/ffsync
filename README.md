@@ -24,7 +24,7 @@ A reliable, single-binary Go CLI that syncs a local directory to [FolderFort](ht
    ```powershell
    ffsync version
    ```
-   
+
 4. Configure (see [Configuration](#configuration)), then run e.g.:
 
    ```powershell
@@ -80,6 +80,16 @@ The binary is installed to `~/go/bin/ffsync`; ensure `~/go/bin` is on your PATH.
    ```
 
 3. Configure (see [Configuration](#configuration)).
+
+### Updating
+
+To update to the latest release from GitHub:
+
+```bash
+ffsync selfupdate
+```
+
+This downloads the release that matches your OS and architecture and replaces the current binary. On Windows, exit the terminal after the command and run `ffsync` again to complete the update.
 
 **Optional – install via Go:**
 
