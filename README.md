@@ -91,12 +91,6 @@ ffsync selfupdate
 
 This downloads the release that matches your OS and architecture and replaces the current binary. On Windows, exit the terminal after the command and run `ffsync` again to complete the update.
 
-**Optional – install via Go:**
-
-```bash
-go install github.com/ffsync/ffsync/cmd/ffsync@latest
-```
-
 ---
 
 ## Configuration
@@ -224,10 +218,44 @@ Or use the Makefile: `make all` (builds all platform binaries).
 
 ## Development
 
+### Prerequisites
+
+- [Go 1.22+](https://go.dev/dl/) (see [Building from source](#building-from-source))
+- A [FolderFort](https://folderfort.com) account (for testing sync)
+
+### Get the repo and build
+
+Clone and build as in [Building from source](#building-from-source). On Windows use `go build -o ffsync.exe ./cmd/ffsync` (or rename the output).
+
+### Project structure
+
+| Path | Purpose |
+|------|---------|
+| `cmd/ffsync/` | Main entrypoint; wires up commands and flags |
+| `internal/cli/` | Cobra commands: `config`, `sync`, `copy`, `ls`, `mkdir`, `check`, `selfupdate`, `version` |
+| `internal/config/` | Config file and env loading |
+| `internal/client/` | HTTP client and FolderFort API (login, presign, create entry) |
+| `internal/remote/` | Remote “filesystem” (list, mkdir, upload) |
+| `internal/local/` | Local scan and file listing (with default excludes) |
+| `internal/plan/` | Sync plan (diff local vs remote) |
+| `internal/sync/` | Sync execution (lock, upload, delete) |
+| `pkg/pathutil/` | Path normalization and glob matching |
+
+### Run tests
+
 ```bash
 go test ./...
-go build ./cmd/ffsync
 ```
+
+### Try it locally
+
+After building, set up config (see [Configuration](#configuration)), then run a dry-run sync:
+
+```bash
+./ffsync sync ./some-local-dir remote:path --dry-run
+```
+
+Use `-v` for verbose logs.
 
 ### How to release
 
