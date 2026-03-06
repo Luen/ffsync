@@ -201,25 +201,21 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 }
 
 // ListAll returns all file entries for a folder, fetching every page so no existing folder is missed.
-// Uses orderBy=name for stable pagination. Uses perPage=100 because many Laravel/BeDrive APIs cap
-// per_page at 100; we stop only when we receive fewer than perPage results (so we don't rely on
-// last_page, which can be wrong and would cause us to miss folders and get 422 on create).
+// Uses orderBy=name for stable pagination. Uses perPage=50 because the FolderFort API caps at 50;
+// we stop only when we receive fewer than perPage results (so we don't rely on last_page).
 func (c *Client) ListAll(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
-	const perPage = 100
+	const perPage = 50
 	var all []FileEntryResponse
 	page := 1
 	for {
-		entries, lastPage, err := c.listPageByName(ctx, folderID, page, perPage)
+		entries, _, err := c.listPageByName(ctx, folderID, page, perPage)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, entries...)
-		// Stop only when we got a partial or empty page (reliable). Do not stop just because
-		// page >= lastPage — the API may report last_page incorrectly when it caps per_page.
+		// Stop only when we got a partial or empty page. Do NOT use lastPage — FolderFort
+		// reports last_page=1 when it caps at 50, so we would otherwise never fetch page 2+.
 		if len(entries) == 0 || len(entries) < perPage {
-			break
-		}
-		if page >= lastPage {
 			break
 		}
 		page++
