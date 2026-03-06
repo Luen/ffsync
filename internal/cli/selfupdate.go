@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	githubReleasesURL = "https://api.github.com/repos/ffsync/ffsync/releases/latest"
+	githubReleasesURL = "https://api.github.com/repos/Luen/ffsync/releases/latest"
 )
 
 type githubRelease struct {
@@ -32,7 +32,7 @@ func SelfupdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "selfupdate",
 		Short: "Update ffsync to the latest release from GitHub",
-		Long:  "Downloads the latest release from GitHub (ffsync/ffsync) for the current OS and architecture, then replaces the running binary.",
+		Long:  "Downloads the latest release from GitHub (Luen/ffsync) for the current OS and architecture, then replaces the running binary.",
 		RunE:  runSelfupdate,
 	}
 }

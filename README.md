@@ -10,14 +10,14 @@ A reliable, single-binary Go CLI that syncs a local directory to [FolderFort](ht
 
 ### Quickstart (all platforms)
 
-1. **Download** the latest binary for your OS and CPU from [Releases](https://github.com/ffsync/ffsync/releases).
+1. **Download** the latest binary for your OS and CPU from [Releases](https://github.com/Luen/ffsync/releases).
 2. **Extract** the executable (`ffsync` or `ffsync.exe` on Windows) and put it somewhere on your PATH.
 3. **Configure** once with `ffsync config init`, then `ffsync config set email <your@email>` and `ffsync config set password <yourpassword>` (see [Configuration](#configuration)).
 4. **Sync** with `ffsync sync <local_dir> remote:<path>`.
 
 ### Windows
 
-1. Open the [Releases](https://github.com/ffsync/ffsync/releases) page and download **ffsync-windows-amd64.exe** (or the ARM64 build if you use an ARM PC).
+1. Open the [Releases](https://github.com/Luen/ffsync/releases) page and download **ffsync-windows-amd64.exe** (or the ARM64 build if you use an ARM PC).
 2. Rename it to `ffsync.exe` and move it to a folder on your PATH (e.g. `C:\Program Files\ffsync` or a folder you added to PATH).
 3. Open PowerShell or CMD and run:
 
@@ -34,14 +34,14 @@ A reliable, single-binary Go CLI that syncs a local directory to [FolderFort](ht
 **Optional – install via Go (if you have Go installed):**
 
 ```powershell
-go install github.com/ffsync/ffsync/cmd/ffsync@latest
+go install github.com/Luen/ffsync/cmd/ffsync@latest
 ```
 
 The binary is installed to `%USERPROFILE%\go\bin\ffsync.exe`; ensure that directory is on your PATH.
 
 ### macOS
 
-1. Open [Releases](https://github.com/ffsync/ffsync/releases) and download the archive for your Mac:
+1. Open [Releases](https://github.com/Luen/ffsync/releases) and download the archive for your Mac:
    - **Apple Silicon (M1/M2/M3):** `ffsync-darwin-arm64`
    - **Intel:** `ffsync-darwin-amd64`
 2. Unzip and move the binary to your PATH, e.g.:
@@ -62,14 +62,14 @@ The binary is installed to `%USERPROFILE%\go\bin\ffsync.exe`; ensure that direct
 **Optional – install via Go:**
 
 ```bash
-go install github.com/ffsync/ffsync/cmd/ffsync@latest
+go install github.com/Luen/ffsync/cmd/ffsync@latest
 ```
 
 The binary is installed to `~/go/bin/ffsync`; ensure `~/go/bin` is on your PATH.
 
 ### Linux
 
-1. Open [Releases](https://github.com/ffsync/ffsync/releases) and download the binary for your architecture:
+1. Open [Releases](https://github.com/Luen/ffsync/releases) and download the binary for your architecture:
    - **x86_64 / amd64:** `ffsync-linux-amd64`
    - **Raspberry Pi 4 / aarch64:** `ffsync-linux-arm64`
 2. Install to a directory on your PATH, e.g.:
@@ -199,7 +199,7 @@ ffsync sync "C:\my-files" remote:backup
 Requires [Go 1.22+](https://go.dev/dl/).
 
 ```bash
-git clone https://github.com/ffsync/ffsync
+git clone https://github.com/Luen/ffsync
 cd ffsync
 go build -o ffsync ./cmd/ffsync
 ```
@@ -259,7 +259,7 @@ Use `-v` for verbose logs.
 
 ### How to release
 
-Releases are built and published to [GitHub Releases](https://github.com/ffsync/ffsync/releases) by [GitHub Actions](.github/workflows/release.yml) when you push a version tag. Release notes are generated from merged pull requests and commit messages since the previous tag.
+Releases are built and published to [GitHub Releases](https://github.com/Luen/ffsync/releases) by [GitHub Actions](.github/workflows/release.yml) when you push a version tag. Release notes are generated from merged pull requests and commit messages since the previous tag.
 
 1. Ensure main (or your default branch) is in a good state and all changes are committed.
 2. Create and push an annotated tag (e.g. for version 1.0.0):
