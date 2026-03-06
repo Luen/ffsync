@@ -64,14 +64,15 @@ jobs:
 
             - name: Build
               env:
-                  LDFLAGS: -ldflags "-s -w -X github.com/ffsync/ffsync/internal/cli.versionStr=${{ steps.version.outputs.version }}"
+                  VERSION: ${{ steps.version.outputs.version }}
               run: |
                   mkdir -p dist
-                  GOOS=linux GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-linux-amd64 ./cmd/ffsync
-                  GOOS=linux GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-linux-arm64 ./cmd/ffsync
-                  GOOS=darwin GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-darwin-amd64 ./cmd/ffsync
-                  GOOS=darwin GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-darwin-arm64 ./cmd/ffsync
-                  GOOS=windows GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-windows-amd64.exe ./cmd/ffsync
+                  LDFLAGS="-s -w -X github.com/ffsync/ffsync/internal/cli.versionStr=$VERSION"
+                  GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ffsync-linux-amd64 ./cmd/ffsync
+                  GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/ffsync-linux-arm64 ./cmd/ffsync
+                  GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ffsync-darwin-amd64 ./cmd/ffsync
+                  GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/ffsync-darwin-arm64 ./cmd/ffsync
+                  GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ffsync-windows-amd64.exe ./cmd/ffsync
 
             - name: Create Release
               uses: softprops/action-gh-release@v2
