@@ -3,14 +3,18 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/ffsync/ffsync/internal/client"
 	"github.com/ffsync/ffsync/internal/config"
 	"github.com/ffsync/ffsync/internal/remote"
-	"github.com/ffsync/ffsync/internal/sync"
+	syncpkg "github.com/ffsync/ffsync/internal/sync"
 )
 
 // Exit codes.
@@ -23,7 +27,8 @@ const (
 
 // AuthClient loads config, creates client, ensures session (reusing stored cookies or logging in), and returns base folder ID for the remote path.
 // If noCookieStore is true, no cookie file is used (in-memory only for this run).
-func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool) (cfg *config.Config, cl *client.Client, baseFolderID string, err error) {
+// If showProgress is true, session-check and login messages are printed to stderr (e.g. when sync uses --progress or --stats).
+func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool, showProgress bool) (cfg *config.Config, cl *client.Client, baseFolderID string, err error) {
 	cfg, err = config.Load()
 	if err != nil {
 		return nil, nil, "", err
@@ -41,15 +46,24 @@ func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool) (cfg
 	}
 	// With persistent store: try reusing session (List root). Otherwise or on error, login.
 	if cookiePath != "" {
+		if showProgress {
+			fmt.Fprintln(os.Stderr, "Checking session...")
+		}
 		if _, tryErr := cl.List(ctx, ""); tryErr == nil {
 			// session valid, skip login
 		} else {
+			if showProgress {
+				fmt.Fprintln(os.Stderr, "Session not found, invalid, or expired. Logging in.")
+			}
 			if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
 				slog.Error("login failed", "err", err)
 				return nil, nil, "", err
 			}
 		}
 	} else {
+		if showProgress {
+			fmt.Fprintln(os.Stderr, "Logging in.")
+		}
 		if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
 			slog.Error("login failed", "err", err)
 			return nil, nil, "", err
@@ -96,18 +110,49 @@ func exit(err error) {
 }
 
 // BuildRemoteMaps lists remote recursively and returns files and folders maps.
-func BuildRemoteMaps(ctx context.Context, cl *client.Client, baseFolderID string) (files map[string]remote.Object, folders map[string]remote.Folder, err error) {
-	apiFiles, apiFolders, err := cl.ListRecursive(ctx, baseFolderID, "")
+// If progressWriter is non-nil, a live-updating progress line is written to it (e.g. os.Stderr).
+func BuildRemoteMaps(ctx context.Context, cl *client.Client, baseFolderID string, progressWriter io.Writer) (files map[string]remote.Object, folders map[string]remote.Folder, err error) {
+	var filesCount, foldersCount atomic.Int64
+	var progress client.ListRecursiveProgress
+	var done chan struct{}
+	var wg sync.WaitGroup
+	if progressWriter != nil {
+		progress = func(deltaFiles, deltaFolders int) {
+			filesCount.Add(int64(deltaFiles))
+			foldersCount.Add(int64(deltaFolders))
+		}
+		done = make(chan struct{})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					fmt.Fprintf(progressWriter, "\rListing remote... %d files, %d folders   \n", filesCount.Load(), foldersCount.Load())
+					return
+				case <-ticker.C:
+					fmt.Fprintf(progressWriter, "\rListing remote... %d files, %d folders   ", filesCount.Load(), foldersCount.Load())
+				}
+			}
+		}()
+	}
+	apiFiles, apiFolders, err := cl.ListRecursive(ctx, baseFolderID, "", progress)
+	if done != nil {
+		close(done)
+		wg.Wait()
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	files = make(map[string]remote.Object)
 	for path, e := range apiFiles {
-		files[path] = sync.RemoteObjectFromEntry(path, e)
+		files[path] = syncpkg.RemoteObjectFromEntry(path, e)
 	}
 	folders = make(map[string]remote.Folder)
 	for path, id := range apiFolders {
-		folders[path] = sync.RemoteFolderFromPath(path, id)
+		folders[path] = syncpkg.RemoteFolderFromPath(path, id)
 	}
 	return files, folders, nil
 }

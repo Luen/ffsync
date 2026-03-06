@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"time"
@@ -40,7 +41,12 @@ func SyncCmd() *cobra.Command {
 			}
 			ctx := context.Background()
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
-			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
+			showProgress := progressFiles || (cmd.Flags().Changed("stats") && statsInterval != "" && statsInterval != "0")
+			var progressWriter io.Writer
+			if showProgress {
+				progressWriter = os.Stderr
+			}
+			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore, showProgress)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
@@ -50,7 +56,7 @@ func SyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			remoteFiles, remoteFolders, err := BuildRemoteMaps(ctx, cl, baseFolderID)
+			remoteFiles, remoteFolders, err := BuildRemoteMaps(ctx, cl, baseFolderID, progressWriter)
 			if err != nil {
 				return err
 			}
@@ -84,11 +90,15 @@ func SyncCmd() *cobra.Command {
 				}
 				statsDur = d
 			}
+			var syncProgressWriter io.Writer
+			if showProgress {
+				syncProgressWriter = os.Stderr
+			}
 			opts := sync.ExecutorOptions{
 				DryRun:         dryRun,
 				Transfers:      transfers,
 				StatePath:      statePath,
-				ProgressWriter: os.Stderr,
+				ProgressWriter: syncProgressWriter,
 				StatsInterval:  statsDur,
 				ProgressFiles:  progressFiles,
 			}

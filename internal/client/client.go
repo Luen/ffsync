@@ -613,10 +613,15 @@ func retryWithBackoff(ctx context.Context, maxAttempts int, fn func() error) err
 
 const defaultMaxRetries = 3
 
+// ListRecursiveProgress is called with delta (files, folders) added at each step during ListRecursive.
+// Pass nil to disable. The caller should accumulate deltas for a running total.
+type ListRecursiveProgress func(deltaFiles, deltaFolders int)
+
 // ListRecursive returns all files and folders under folderID with paths relative to prefix.
 // prefix is the path prefix for the current folder (e.g. "" or "a/b").
 // Subfolders are listed concurrently (bounded by ListRecurseConcurrency) to speed up startup.
-func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (files map[string]FileEntryResponse, folders map[string]string, err error) {
+// When progress is non-nil, it is called with (deltaFiles, deltaFolders) after the initial list and after each subfolder merge.
+func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, progress ListRecursiveProgress) (files map[string]FileEntryResponse, folders map[string]string, err error) {
 	files = make(map[string]FileEntryResponse)
 	folders = make(map[string]string)
 	entries, err := c.ListAll(ctx, folderID)
@@ -643,6 +648,9 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (fi
 			files[fullPath] = e
 		}
 	}
+	if progress != nil {
+		progress(len(files), len(folders))
+	}
 	if len(subfolders) == 0 {
 		return files, folders, nil
 	}
@@ -651,27 +659,29 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (fi
 		folders map[string]string
 		err     error
 	}
-	results := make([]subResult, len(subfolders))
-	var wg sync.WaitGroup
-	for i, sf := range subfolders {
-		wg.Add(1)
-		go func(i int, entry FileEntryResponse, fullPath string) {
-			defer wg.Done()
+	resultCh := make(chan subResult, len(subfolders))
+	for _, sf := range subfolders {
+		entry, fullPath := sf.entry, sf.fullPath
+		go func() {
 			select {
 			case c.listRecurseSem <- struct{}{}:
 				defer func() { <-c.listRecurseSem }()
 			case <-ctx.Done():
-				results[i] = subResult{err: ctx.Err()}
+				resultCh <- subResult{err: ctx.Err()}
 				return
 			}
-			subFiles, subFolders, listErr := c.ListRecursive(ctx, entry.ID.String(), fullPath)
-			results[i] = subResult{files: subFiles, folders: subFolders, err: listErr}
-		}(i, sf.entry, sf.fullPath)
+			subFiles, subFolders, listErr := c.ListRecursive(ctx, entry.ID.String(), fullPath, progress)
+			resultCh <- subResult{files: subFiles, folders: subFolders, err: listErr}
+		}()
 	}
-	wg.Wait()
-	for _, r := range results {
+	var firstErr error
+	for range subfolders {
+		r := <-resultCh
 		if r.err != nil {
-			return nil, nil, r.err
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
 		}
 		for k, v := range r.files {
 			files[k] = v
@@ -679,6 +689,12 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (fi
 		for k, v := range r.folders {
 			folders[k] = v
 		}
+		if progress != nil {
+			progress(len(r.files), len(r.folders))
+		}
+	}
+	if firstErr != nil {
+		return nil, nil, firstErr
 	}
 	return files, folders, nil
 }

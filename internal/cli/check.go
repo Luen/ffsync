@@ -32,7 +32,7 @@ func CheckCmd() *cobra.Command {
 			}
 			ctx := context.Background()
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
-			_, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
+			_, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore, false)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
@@ -41,7 +41,7 @@ func CheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			remoteFiles, _, err := BuildRemoteMaps(ctx, cl, baseFolderID)
+			remoteFiles, _, err := BuildRemoteMaps(ctx, cl, baseFolderID, nil)
 			if err != nil {
 				return err
 			}

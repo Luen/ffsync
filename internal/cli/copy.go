@@ -35,7 +35,7 @@ func CopyCmd() *cobra.Command {
 			}
 			ctx := context.Background()
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
-			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
+			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore, false)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
@@ -45,7 +45,7 @@ func CopyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			remoteFiles, _, err := BuildRemoteMaps(ctx, cl, baseFolderID)
+			remoteFiles, _, err := BuildRemoteMaps(ctx, cl, baseFolderID, nil)
 			if err != nil {
 				return err
 			}

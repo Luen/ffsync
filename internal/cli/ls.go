@@ -31,7 +31,7 @@ func LsCmd() *cobra.Command {
 
 			ctx := context.Background()
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
-			_, cl, baseFolderID, err := AuthClient(ctx, spec, noCookieStore)
+			_, cl, baseFolderID, err := AuthClient(ctx, spec, noCookieStore, false)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)

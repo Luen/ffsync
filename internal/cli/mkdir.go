@@ -29,7 +29,7 @@ func MkdirCmd() *cobra.Command {
 
 			ctx := context.Background()
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
-			_, _, baseFolderID, err := AuthClient(ctx, "remote:"+path, noCookieStore)
+			_, _, baseFolderID, err := AuthClient(ctx, "remote:"+path, noCookieStore, false)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
