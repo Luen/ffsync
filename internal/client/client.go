@@ -699,9 +699,20 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, pro
 	return files, folders, nil
 }
 
-// DeleteFileEntry deletes a file or folder by ID.
+// DeleteFileEntry deletes a single file or folder by ID (uses bulk delete API with one ID).
 func (c *Client) DeleteFileEntry(ctx context.Context, entryID string) error {
-	req, err := c.authReq(ctx, http.MethodDelete, "/api/v1/file-entries/"+entryID, nil)
+	return c.DeleteFileEntries(ctx, []string{entryID}, true)
+}
+
+// DeleteFileEntries deletes multiple files/folders via POST /api/v1/file-entries/delete (same as web UI).
+// deleteForever: true = permanent delete; false = move to trash.
+func (c *Client) DeleteFileEntries(ctx context.Context, entryIDs []string, deleteForever bool) error {
+	if len(entryIDs) == 0 {
+		return nil
+	}
+	body := DeleteFileEntriesRequest{EntryIDs: entryIDs, DeleteForever: deleteForever}
+	raw, _ := json.Marshal(body)
+	req, err := c.authReq(ctx, http.MethodPost, "/api/v1/file-entries/delete", bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -710,9 +721,29 @@ func (c *Client) DeleteFileEntry(ctx context.Context, entryID string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusOK {
 		bb, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("delete failed: %s (%s)", resp.Status, string(bb))
+	}
+	return nil
+}
+
+// EmptyTrash permanently deletes all items in trash (POST /api/v1/file-entries/delete with emptyTrash: true).
+func (c *Client) EmptyTrash(ctx context.Context) error {
+	body := DeleteFileEntriesRequest{EntryIDs: []string{}, EmptyTrash: true}
+	raw, _ := json.Marshal(body)
+	req, err := c.authReq(ctx, http.MethodPost, "/api/v1/file-entries/delete", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bb, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("empty trash failed: %s (%s)", resp.Status, string(bb))
 	}
 	return nil
 }

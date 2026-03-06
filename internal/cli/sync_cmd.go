@@ -17,7 +17,7 @@ import (
 
 // SyncCmd returns the sync command.
 func SyncCmd() *cobra.Command {
-	var deleteFlag, dryRun, force, progressFiles bool
+	var deleteFlag, dryRun, force, progressFiles, trash bool
 	var checkers, transfers, maxDelete int
 	var include, exclude []string
 	var statsInterval string
@@ -101,11 +101,13 @@ func SyncCmd() *cobra.Command {
 				ProgressWriter: syncProgressWriter,
 				StatsInterval:  statsDur,
 				ProgressFiles:  progressFiles,
+				DeleteToTrash:  trash,
 			}
 			return sync.Execute(ctx, p, cl, localRoot, baseFolderID, statePath, opts)
 		},
 	}
 	c.Flags().BoolVar(&deleteFlag, "delete", false, "Delete remote files not in local")
+	c.Flags().BoolVar(&trash, "trash", false, "With --delete: move removed items to trash instead of permanent delete")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "Only log planned actions")
 	c.Flags().BoolVar(&force, "force", false, "Allow deletes beyond --max-delete")
 	c.Flags().BoolVar(&progressFiles, "progress", false, "Show per-file progress (rsync-style; can be noisy with many transfers)")

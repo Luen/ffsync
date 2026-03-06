@@ -25,6 +25,7 @@ func main() {
 	root.AddCommand(cli.CopyCmd())
 	root.AddCommand(cli.SyncCmd())
 	root.AddCommand(cli.CheckCmd())
+	root.AddCommand(cli.EmptyTrashCmd())
 	root.AddCommand(cli.SelfupdateCmd())
 
 	if err := root.Execute(); err != nil {

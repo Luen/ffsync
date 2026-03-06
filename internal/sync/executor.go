@@ -28,6 +28,7 @@ type ExecutorOptions struct {
 	ProgressWriter io.Writer       // progress output (e.g. os.Stderr); nil = no progress
 	StatsInterval  time.Duration   // how often to print one-line stats (e.g. 1s); 0 = no stats line
 	ProgressFiles  bool            // if true, print per-file progress (rsync --progress style)
+	DeleteToTrash  bool            // if true, move removed items to trash instead of permanent delete (only with --delete)
 }
 
 // Execute runs the plan: uploads, updates (upload then delete old), deletes files, then deletes folders.
@@ -168,7 +169,7 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			}
-			runUpload(ctx, cl, localRoot, baseFolderID, f, state, &stateMu, nil, onUploadDone)
+			runUpload(ctx, cl, localRoot, baseFolderID, f, state, &stateMu, nil, !opts.DeleteToTrash, onUploadDone)
 		}()
 	}
 	for _, u := range p.Update {
@@ -182,7 +183,7 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			}
-			runUpload(ctx, cl, localRoot, baseFolderID, u.Local, state, &stateMu, &u.RemoteID, onUploadDone)
+			runUpload(ctx, cl, localRoot, baseFolderID, u.Local, state, &stateMu, &u.RemoteID, !opts.DeleteToTrash, onUploadDone)
 		}()
 	}
 	wg.Wait()
@@ -195,10 +196,31 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 	}
 
 	var deleteDone atomic.Int32
+	// Collect all IDs and use bulk delete (POST /api/v1/file-entries/delete), same as web UI.
+	var allDeleteIDs []string
 	for _, obj := range p.DeleteFiles {
-		if err := cl.DeleteFileEntry(ctx, obj.ID); err != nil {
-			slog.Error("delete file", "path", obj.Path, "err", err)
+		allDeleteIDs = append(allDeleteIDs, obj.ID)
+	}
+	for _, folder := range p.DeleteFolders {
+		allDeleteIDs = append(allDeleteIDs, folder.ID)
+	}
+	const deleteBatchSize = 50
+	for i := 0; i < len(allDeleteIDs); i += deleteBatchSize {
+		end := i + deleteBatchSize
+		if end > len(allDeleteIDs) {
+			end = len(allDeleteIDs)
 		}
+		batch := allDeleteIDs[i:end]
+		deleteForever := !opts.DeleteToTrash
+		if err := cl.DeleteFileEntries(ctx, batch, deleteForever); err != nil {
+			slog.Error("bulk delete", "batch_size", len(batch), "err", err)
+			// Fall back to per-item so we don't lose progress
+			for _, id := range batch {
+				_ = cl.DeleteFileEntries(ctx, []string{id}, deleteForever)
+			}
+		}
+	}
+	for _, obj := range p.DeleteFiles {
 		delete(state.Files, obj.Path)
 		if opts.ProgressWriter != nil && opts.ProgressFiles {
 			n := deleteDone.Add(1)
@@ -208,9 +230,6 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 		}
 	}
 	for _, folder := range p.DeleteFolders {
-		if err := cl.DeleteFileEntry(ctx, folder.ID); err != nil {
-			slog.Error("delete folder", "path", folder.Path, "err", err)
-		}
 		delete(state.Folders, folder.Path)
 		if opts.ProgressWriter != nil && opts.ProgressFiles {
 			n := deleteDone.Add(1)
@@ -254,7 +273,7 @@ func formatDuration(sec float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-func runUpload(ctx context.Context, cl *client.Client, localRoot, baseFolderID string, f local.File, state *local.State, stateMu *sync.Mutex, deleteAfterID *string, onDone func(path string, bytes int64)) {
+func runUpload(ctx context.Context, cl *client.Client, localRoot, baseFolderID string, f local.File, state *local.State, stateMu *sync.Mutex, deleteAfterID *string, deleteForever bool, onDone func(path string, bytes int64)) {
 	parentPath := filepath.Dir(f.Path)
 	if parentPath == "." {
 		parentPath = ""
@@ -309,7 +328,7 @@ func runUpload(ctx context.Context, cl *client.Client, localRoot, baseFolderID s
 		stateMu.Unlock()
 	}
 	if deleteAfterID != nil && *deleteAfterID != "" {
-		_ = cl.DeleteFileEntry(ctx, *deleteAfterID)
+		_ = cl.DeleteFileEntries(ctx, []string{*deleteAfterID}, deleteForever)
 	}
 }
 

@@ -135,3 +135,10 @@ type CreateEntryResponse struct {
 		ID FlexID `json:"id"`
 	} `json:"fileEntry"`
 }
+
+// DeleteFileEntriesRequest is sent to POST /api/v1/file-entries/delete (same as web UI).
+type DeleteFileEntriesRequest struct {
+	EntryIDs      []string `json:"entryIds"`
+	DeleteForever bool     `json:"deleteForever,omitempty"`
+	EmptyTrash    bool     `json:"emptyTrash,omitempty"`
+}
