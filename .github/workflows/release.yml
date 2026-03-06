@@ -3,79 +3,79 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+    push:
+        tags:
+            - 'v*'
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    release:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+            - name: Set up Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version: '1.22'
 
-      - name: Get version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version $VERSION"
+            - name: Get version
+              id: version
+              run: |
+                  VERSION="${GITHUB_REF#refs/tags/v}"
+                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  echo "Building version $VERSION"
 
-      - name: Generate release notes
-        id: notes
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # GitHub-generated notes (merged PRs, contributors, etc.)
-          GENERATED=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG_NAME" \
-            -f target_commitish="${{ github.sha }}" \
-            -q '.body' 2>/dev/null || echo "")
+            - name: Generate release notes
+              id: notes
+              env:
+                  TAG_NAME: ${{ github.ref_name }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # GitHub-generated notes (merged PRs, contributors, etc.) – optional, do not fail step
+                  GENERATED=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+                    -f tag_name="$TAG_NAME" \
+                    -f target_commitish="${{ github.sha }}" \
+                    -q '.body' 2>/dev/null) || GENERATED=""
 
-          # Previous tag for commit range (empty on first release)
-          PREV=$(git tag --sort=-v:refname | while read t; do [ "$t" != "$TAG_NAME" ] && echo "$t" && break; done)
-          if [ -n "$PREV" ]; then
-            COMMITS=$(git log "$PREV..HEAD" --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          fi
+                  # Previous tag for commit range (empty on first release)
+                  PREV=$(git tag --sort=-v:refname | while read t; do [ "$t" != "$TAG_NAME" ] && echo "$t" && break; done)
+                  if [ -n "$PREV" ]; then
+                    COMMITS=$(git log "$PREV..HEAD" --pretty=format:"- %s (%h)" --no-merges) || COMMITS=""
+                  else
+                    COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges) || COMMITS=""
+                  fi
 
-          # Combine: generated notes + full commit list
-          {
-            echo "$GENERATED"
-            echo ""
-            echo "## Commits"
-            echo ""
-            echo "$COMMITS"
-          } > release_notes.md
+                  # Combine: generated notes + full commit list
+                  {
+                    echo "$GENERATED"
+                    echo ""
+                    echo "## Commits"
+                    echo ""
+                    echo "$COMMITS"
+                  } > release_notes.md
 
-      - name: Build
-        env:
-          LDFLAGS: -ldflags "-s -w -X github.com/ffsync/ffsync/internal/cli.versionStr=${{ steps.version.outputs.version }}"
-        run: |
-          mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-linux-amd64 ./cmd/ffsync
-          GOOS=linux GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-linux-arm64 ./cmd/ffsync
-          GOOS=darwin GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-darwin-amd64 ./cmd/ffsync
-          GOOS=darwin GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-darwin-arm64 ./cmd/ffsync
-          GOOS=windows GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-windows-amd64.exe ./cmd/ffsync
+            - name: Build
+              env:
+                  LDFLAGS: -ldflags "-s -w -X github.com/ffsync/ffsync/internal/cli.versionStr=${{ steps.version.outputs.version }}"
+              run: |
+                  mkdir -p dist
+                  GOOS=linux GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-linux-amd64 ./cmd/ffsync
+                  GOOS=linux GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-linux-arm64 ./cmd/ffsync
+                  GOOS=darwin GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-darwin-amd64 ./cmd/ffsync
+                  GOOS=darwin GOARCH=arm64 go build $LDFLAGS -o dist/ffsync-darwin-arm64 ./cmd/ffsync
+                  GOOS=windows GOARCH=amd64 go build $LDFLAGS -o dist/ffsync-windows-amd64.exe ./cmd/ffsync
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          body_path: release_notes.md
-          draft: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Create Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: dist/*
+                  body_path: release_notes.md
+                  draft: false
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
