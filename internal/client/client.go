@@ -748,6 +748,29 @@ func (c *Client) EmptyTrash(ctx context.Context) error {
 	return nil
 }
 
+// SpaceUsage returns the user's storage usage (GET /api/v1/user/space-usage).
+// Used and Available are in bytes.
+func (c *Client) SpaceUsage(ctx context.Context) (*SpaceUsageResponse, error) {
+	req, err := c.authReq(ctx, http.MethodGet, "/api/v1/user/space-usage", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bb, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("space-usage failed: %s (%s)", resp.Status, string(bb))
+	}
+	var out SpaceUsageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // UploadFile performs presign, streaming PUT, and create entry with retries.
 // name is the base filename; body is read to completion (size bytes).
 func (c *Client) UploadFile(ctx context.Context, parentID, name, mime, extension string, size int64, body io.Reader) (entryID string, err error) {

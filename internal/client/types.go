@@ -142,3 +142,10 @@ type DeleteFileEntriesRequest struct {
 	DeleteForever bool     `json:"deleteForever,omitempty"`
 	EmptyTrash    bool     `json:"emptyTrash,omitempty"`
 }
+
+// SpaceUsageResponse is the response from GET /api/v1/user/space-usage.
+type SpaceUsageResponse struct {
+	Used      int64  `json:"used"`
+	Available int64  `json:"available"`
+	Status    string `json:"status"`
+}
