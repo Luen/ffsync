@@ -18,13 +18,17 @@ import (
 // DefaultBaseURL is the default FolderFort server.
 const DefaultBaseURL = "https://na.folderfort.com"
 
+// ListRecurseConcurrency limits concurrent folder listings during ListRecursive (startup).
+const ListRecurseConcurrency = 12
+
 // Client is the FolderFort HTTP client (cookies + XSRF).
 type Client struct {
-	BaseURL     string
-	HTTPClient  *http.Client
-	mu          sync.Mutex
-	folderCache sync.Map // "parentID\x00name" -> folderID string
-	folderLocks sync.Map // "parentID\x00name" -> *sync.Mutex
+	BaseURL        string
+	HTTPClient     *http.Client
+	mu             sync.Mutex
+	folderCache    sync.Map // "parentID\x00name" -> folderID string
+	folderLocks    sync.Map // "parentID\x00name" -> *sync.Mutex
+	listRecurseSem chan struct{} // limits concurrent ListRecursive subfolder listing
 }
 
 // New creates a new Client. If cookieFile is non-empty, cookies are loaded from and
@@ -56,6 +60,7 @@ func New(baseURL string, cookieFile string) (*Client, error) {
 				// allow cancellation and timeouts
 			},
 		},
+		listRecurseSem: make(chan struct{}, ListRecurseConcurrency),
 	}, nil
 }
 
@@ -610,12 +615,17 @@ const defaultMaxRetries = 3
 
 // ListRecursive returns all files and folders under folderID with paths relative to prefix.
 // prefix is the path prefix for the current folder (e.g. "" or "a/b").
+// Subfolders are listed concurrently (bounded by ListRecurseConcurrency) to speed up startup.
 func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (files map[string]FileEntryResponse, folders map[string]string, err error) {
 	files = make(map[string]FileEntryResponse)
 	folders = make(map[string]string)
 	entries, err := c.ListAll(ctx, folderID)
 	if err != nil {
 		return nil, nil, err
+	}
+	var subfolders []struct {
+		entry    FileEntryResponse
+		fullPath string
 	}
 	for _, e := range entries {
 		decodedName := decodeSegment(e.Name.String())
@@ -625,18 +635,49 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (fi
 		}
 		if e.Type == "folder" {
 			folders[fullPath] = e.ID.String()
-			subFiles, subFolders, err := c.ListRecursive(ctx, e.ID.String(), fullPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			for k, v := range subFiles {
-				files[k] = v
-			}
-			for k, v := range subFolders {
-				folders[k] = v
-			}
+			subfolders = append(subfolders, struct {
+				entry    FileEntryResponse
+				fullPath string
+			}{e, fullPath})
 		} else {
 			files[fullPath] = e
+		}
+	}
+	if len(subfolders) == 0 {
+		return files, folders, nil
+	}
+	type subResult struct {
+		files   map[string]FileEntryResponse
+		folders map[string]string
+		err     error
+	}
+	results := make([]subResult, len(subfolders))
+	var wg sync.WaitGroup
+	for i, sf := range subfolders {
+		wg.Add(1)
+		go func(i int, entry FileEntryResponse, fullPath string) {
+			defer wg.Done()
+			select {
+			case c.listRecurseSem <- struct{}{}:
+				defer func() { <-c.listRecurseSem }()
+			case <-ctx.Done():
+				results[i] = subResult{err: ctx.Err()}
+				return
+			}
+			subFiles, subFolders, listErr := c.ListRecursive(ctx, entry.ID.String(), fullPath)
+			results[i] = subResult{files: subFiles, folders: subFolders, err: listErr}
+		}(i, sf.entry, sf.fullPath)
+	}
+	wg.Wait()
+	for _, r := range results {
+		if r.err != nil {
+			return nil, nil, r.err
+		}
+		for k, v := range r.files {
+			files[k] = v
+		}
+		for k, v := range r.folders {
+			folders[k] = v
 		}
 	}
 	return files, folders, nil
