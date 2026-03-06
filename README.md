@@ -18,14 +18,21 @@ A reliable, single-binary Go CLI that syncs a local directory to [FolderFort](ht
 ### Windows
 
 1. Open the [Releases](https://github.com/Luen/ffsync/releases) page and download **ffsync-windows-amd64.exe** (or the ARM64 build if you use an ARM PC).
-2. Rename it to `ffsync.exe` and move it to a folder on your PATH (e.g. `C:\Program Files\ffsync` or a folder you added to PATH).
-3. Open PowerShell or CMD and run:
+2. Rename it to `ffsync.exe` and move it to a folder (e.g. `C:\ffsync`).
+3. Add that folder to your PATH so you can run `ffsync` from any terminal. In the current PowerShell session only:
+
+   ```powershell
+   $env:Path = $env:Path + ";C:\ffsync"
+   ```
+
+   To add it permanently, open **Settings → System → About → Advanced system settings → Environment variables**, edit **Path** under your user account, and add `C:\ffsync` (or the folder you used). New terminals will then have `ffsync` on PATH.
+4. Open PowerShell or CMD and run:
 
    ```powershell
    ffsync version
    ```
 
-4. Configure (see [Configuration](#configuration)), then run e.g.:
+5. Configure (see [Configuration](#configuration)), then run e.g.:
 
    ```powershell
    ffsync sync "C:\Users\Downloads\my-files" remote:backup
@@ -173,12 +180,14 @@ ffsync sync "C:\my-files" remote:backup
 
 ### Sync options
 
-- `--delete` – Delete remote files/folders not present locally  
-- `--dry-run` – Show what would be done; no changes  
-- `--max-delete N` – Abort if planned deletes exceed N (default 10); use `--force` to override  
-- `--transfers N` – Number of concurrent uploads (default 4)  
-- `--exclude GLOB` – Exclude paths (repeatable)  
-- `--include GLOB` – Include paths (repeatable)  
+- `--delete` – Delete remote files/folders not present locally
+- `--dry-run` – Show what would be done; no changes
+- `--stats DURATION` – How often to update the one-line progress (default `1s`). Example: `--stats 500ms`. Use `--stats 0` to disable
+- `--progress` – Show per-file progress (rsync-style; can be noisy with many concurrent transfers)
+- `--max-delete N` – Abort if planned deletes exceed N (default 10); use `--force` to override
+- `--transfers N` – Number of concurrent uploads (default 4)
+- `--exclude GLOB` – Exclude paths (repeatable)
+- `--include GLOB` – Include paths (repeatable)
 
 ### Safety
 
@@ -272,4 +281,4 @@ Releases are built and published to [GitHub Releases](https://github.com/Luen/ff
 3. The workflow runs automatically, builds binaries for Linux, macOS, and Windows (amd64 and arm64 where applicable), and creates the release with artifacts and generated notes.
 4. Optionally edit the release description or add more assets in the GitHub Releases UI.
 
-FolderFort is built on top of [BeDrive](https://codecanyon.net/item/bedrive-mobile-native-flutter-android-and-ios-app-for-file-storage-php-script/31088424).
+FolderFort is built on top of [BeDrive](https://codecanyon.net/item/bedrive-mobile-native-flutter-android-and-ios-app-for-file-storage-php-script/31088424) and uses [Backblaze](https://www.backblaze.com/).
