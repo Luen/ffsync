@@ -34,7 +34,8 @@ func CopyCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec)
+			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
+			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)

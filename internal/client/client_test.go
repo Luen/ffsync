@@ -51,7 +51,7 @@ func TestLoginAndList(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl, err := New(srv.URL)
+	cl, err := New(srv.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestLoginAndList(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
-	if entries[0].Name != "file1.txt" || entries[1].Name != "dir1" {
+	if entries[0].Name.String() != "file1.txt" || entries[1].Name.String() != "dir1" {
 		t.Errorf("unexpected entries: %+v", entries)
 	}
 }
@@ -107,7 +107,7 @@ func TestCreateFolder(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl, _ := New(srv.URL)
+	cl, _ := New(srv.URL, "")
 	ctx := context.Background()
 	_ = cl.Login(ctx, "u@e.com", "secret")
 	id, err := cl.CreateFolder(ctx, "mydir", "parent-id")
@@ -178,7 +178,7 @@ func TestPresignAndUpload(t *testing.T) {
 	}))
 	defer apiSrv.Close()
 
-	cl, _ := New(apiSrv.URL)
+	cl, _ := New(apiSrv.URL, "")
 	ctx := context.Background()
 	_ = cl.Login(ctx, "u@e.com", "secret")
 	entryID, err := cl.UploadFile(ctx, "parent-id", "test.txt", "text/plain", "txt", 5, strings.NewReader("hello"))

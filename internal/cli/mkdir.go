@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ffsync/ffsync/internal/client"
-	"github.com/ffsync/ffsync/internal/config"
 	"github.com/ffsync/ffsync/internal/remote"
 	"github.com/spf13/cobra"
 )
@@ -29,29 +27,14 @@ func MkdirCmd() *cobra.Command {
 				return fmt.Errorf("path is required for mkdir")
 			}
 
-			cfg, err := config.Load()
+			ctx := context.Background()
+			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
+			_, _, baseFolderID, err := AuthClient(ctx, "remote:"+path, noCookieStore)
 			if err != nil {
-				return err
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(ExitAuth)
 			}
-			if cfg.Email == "" || cfg.Password == "" {
-				fmt.Fprintln(os.Stderr, "Not configured.")
-				os.Exit(2)
-			}
-
-			cl, err := client.New(cfg.BaseURL)
-			if err != nil {
-				return err
-			}
-			if err := cl.Login(context.Background(), cfg.Email, cfg.Password); err != nil {
-				fmt.Fprintln(os.Stderr, "Login failed:", err)
-				os.Exit(2)
-			}
-
-			folderID, err := cl.EnsureFolderPath(context.Background(), "", path)
-			if err != nil {
-				return err
-			}
-			fmt.Println("Created path, folder ID:", folderID)
+			fmt.Println("Created path, folder ID:", baseFolderID)
 			return nil
 		},
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"time"
 
 	"github.com/ffsync/ffsync/internal/local"
 	"github.com/ffsync/ffsync/internal/plan"
@@ -14,9 +16,10 @@ import (
 
 // SyncCmd returns the sync command.
 func SyncCmd() *cobra.Command {
-	var deleteFlag, dryRun, force bool
+	var deleteFlag, dryRun, force, progressFiles bool
 	var checkers, transfers, maxDelete int
 	var include, exclude []string
+	var statsInterval string
 	c := &cobra.Command{
 		Use:   "sync <local> remote:path",
 		Short: "Sync local directory to remote (one-way mirror)",
@@ -36,7 +39,8 @@ func SyncCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec)
+			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
+			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
@@ -62,11 +66,31 @@ func SyncCmd() *cobra.Command {
 				return err
 			}
 			defer sync.Unlock(unlock)
+			// Clean up lock on Ctrl+C / interrupt so the next run doesn't see a stale lock.
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt)
+			go func() {
+				<-sigCh
+				sync.Unlock(unlock)
+				os.Exit(130)
+			}()
+			defer signal.Stop(sigCh)
 			statePath := StatePath(localRoot)
+			statsDur := time.Duration(0)
+			if statsInterval != "" && statsInterval != "0" {
+				d, err := time.ParseDuration(statsInterval)
+				if err != nil {
+					return fmt.Errorf("invalid --stats duration %q: %w", statsInterval, err)
+				}
+				statsDur = d
+			}
 			opts := sync.ExecutorOptions{
-				DryRun:    dryRun,
-				Transfers: transfers,
-				StatePath: statePath,
+				DryRun:         dryRun,
+				Transfers:      transfers,
+				StatePath:      statePath,
+				ProgressWriter: os.Stderr,
+				StatsInterval:  statsDur,
+				ProgressFiles:  progressFiles,
 			}
 			return sync.Execute(ctx, p, cl, localRoot, baseFolderID, statePath, opts)
 		},
@@ -74,6 +98,11 @@ func SyncCmd() *cobra.Command {
 	c.Flags().BoolVar(&deleteFlag, "delete", false, "Delete remote files not in local")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "Only log planned actions")
 	c.Flags().BoolVar(&force, "force", false, "Allow deletes beyond --max-delete")
+	c.Flags().BoolVar(&progressFiles, "progress", false, "Show per-file progress (rsync-style; can be noisy with many transfers)")
+	c.Flags().StringVar(&statsInterval, "stats", "1s", "Progress stats update interval (e.g. 1s, 500ms). Use 0 to disable the one-line stats")
+	if f := c.Flags().Lookup("stats"); f != nil {
+		f.NoOptDefVal = "1s" // --stats with no value means use default 1s
+	}
 	c.Flags().IntVar(&checkers, "checkers", 4, "Number of hash checkers")
 	c.Flags().IntVar(&transfers, "transfers", 4, "Number of transfer workers")
 	c.Flags().IntVar(&maxDelete, "max-delete", 10, "Abort if planned deletes exceed this (0 = no deletes unless --force)")

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,16 +20,30 @@ const DefaultBaseURL = "https://na.folderfort.com"
 
 // Client is the FolderFort HTTP client (cookies + XSRF).
 type Client struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	mu         sync.Mutex
+	BaseURL     string
+	HTTPClient  *http.Client
+	mu          sync.Mutex
+	folderCache sync.Map // "parentID\x00name" -> folderID string
+	folderLocks sync.Map // "parentID\x00name" -> *sync.Mutex
 }
 
-// New creates a new Client with cookie jar. BaseURL should not have trailing slash.
-func New(baseURL string) (*Client, error) {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, err
+// New creates a new Client. If cookieFile is non-empty, cookies are loaded from and
+// saved to that file; otherwise an in-memory jar is used (no persistence).
+// BaseURL should not have trailing slash.
+func New(baseURL string, cookieFile string) (*Client, error) {
+	var jar http.CookieJar
+	if cookieFile != "" {
+		fj, err := newFileJar(cookieFile)
+		if err != nil {
+			return nil, err
+		}
+		jar = fj
+	} else {
+		var err error
+		jar, err = cookiejar.New(nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
@@ -135,8 +151,15 @@ func (c *Client) Login(ctx context.Context, email, password string) error {
 	return nil
 }
 
-// List returns file entries for a folder. Use empty folderID for root.
+// List returns the first page of file entries for a folder. Use ListAll to get every entry (e.g. before creating a folder).
 func (c *Client) List(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
+	entries, _, err := c.ListPage(ctx, folderID, 1, 100)
+	return entries, err
+}
+
+// ListPage returns one page of file entries. page is 1-based; perPage is the page size.
+// Returns (entries, lastPage). If the API does not return pagination meta, lastPage is 1.
+func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage int) ([]FileEntryResponse, int, error) {
 	u, _ := url.Parse(c.base() + "/api/v1/drive/file-entries")
 	q := u.Query()
 	q.Set("section", "folder")
@@ -144,11 +167,13 @@ func (c *Client) List(ctx context.Context, folderID string) ([]FileEntryResponse
 	q.Set("workspaceId", "0")
 	q.Set("orderBy", "updated_at")
 	q.Set("orderDir", "desc")
+	q.Set("page", strconv.Itoa(page))
+	q.Set("per_page", strconv.Itoa(perPage))
 	u.RawQuery = q.Encode()
 
 	req, err := c.authReq(ctx, http.MethodGet, u.Path+"?"+u.RawQuery, nil)
 	if err != nil {
-		return nil, err
+		return nil, 1, err
 	}
 	req.URL = u
 	req.Method = http.MethodGet
@@ -157,21 +182,95 @@ func (c *Client) List(ctx context.Context, folderID string) ([]FileEntryResponse
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 1, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		bb, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list failed: %s (%s)", resp.Status, string(bb))
+		return nil, 1, fmt.Errorf("list failed: %s (%s)", resp.Status, string(bb))
 	}
 	var out FileEntriesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		return nil, 1, err
 	}
-	return out.Data, nil
+	lastPage := 1
+	if out.Meta != nil && out.Meta.LastPage != nil && *out.Meta.LastPage > 0 {
+		lastPage = *out.Meta.LastPage
+	}
+	return out.Data, lastPage, nil
+}
+
+// ListAll returns all file entries for a folder, fetching every page so no existing folder is missed.
+// Uses orderBy=name for stable pagination. Uses perPage=100 because many Laravel/BeDrive APIs cap
+// per_page at 100; we stop only when we receive fewer than perPage results (so we don't rely on
+// last_page, which can be wrong and would cause us to miss folders and get 422 on create).
+func (c *Client) ListAll(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
+	const perPage = 100
+	var all []FileEntryResponse
+	page := 1
+	for {
+		entries, lastPage, err := c.listPageByName(ctx, folderID, page, perPage)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, entries...)
+		// Stop only when we got a partial or empty page (reliable). Do not stop just because
+		// page >= lastPage — the API may report last_page incorrectly when it caps per_page.
+		if len(entries) == 0 || len(entries) < perPage {
+			break
+		}
+		if page >= lastPage {
+			break
+		}
+		page++
+	}
+	return all, nil
+}
+
+// listPageByName is like ListPage but sorted by name (ascending) for stable pagination.
+func (c *Client) listPageByName(ctx context.Context, folderID string, page, perPage int) ([]FileEntryResponse, int, error) {
+	u, _ := url.Parse(c.base() + "/api/v1/drive/file-entries")
+	q := u.Query()
+	q.Set("section", "folder")
+	q.Set("folderId", folderID)
+	q.Set("workspaceId", "0")
+	q.Set("orderBy", "name")
+	q.Set("orderDir", "asc")
+	q.Set("page", strconv.Itoa(page))
+	q.Set("per_page", strconv.Itoa(perPage))
+	u.RawQuery = q.Encode()
+
+	req, err := c.authReq(ctx, http.MethodGet, u.Path+"?"+u.RawQuery, nil)
+	if err != nil {
+		return nil, 1, err
+	}
+	req.URL = u
+	req.Method = http.MethodGet
+	req.Body = nil
+	req.GetBody = nil
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, 1, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bb, _ := io.ReadAll(resp.Body)
+		return nil, 1, fmt.Errorf("list failed: %s (%s)", resp.Status, string(bb))
+	}
+	var out FileEntriesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, 1, err
+	}
+	lastPage := 1
+	if out.Meta != nil && out.Meta.LastPage != nil && *out.Meta.LastPage > 0 {
+		lastPage = *out.Meta.LastPage
+	}
+	return out.Data, lastPage, nil
 }
 
 // CreateFolder creates a folder under parentID (empty for root).
+// If the API returns 422 "Folder with same name already exists", looks up the existing folder and returns its ID.
 func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (string, error) {
 	var parent *string
 	if parentID != "" {
@@ -190,12 +289,70 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 		return "", err
 	}
 	defer resp.Body.Close()
+	bb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		bb, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusUnprocessableEntity && strings.Contains(string(bb), "already exists") {
+			decodedWant := decodeSegment(name)
+			nameNorm := strings.TrimSpace(name)
+			tryFind := func(entries []FileEntryResponse) string {
+				for _, e := range entries {
+					if e.Type != "folder" {
+						continue
+					}
+					ename := e.Name.String()
+					en := strings.TrimSpace(ename)
+					if ename == name || en == nameNorm || decodeSegment(ename) == decodedWant ||
+						strings.EqualFold(en, nameNorm) || strings.EqualFold(decodeSegment(ename), decodedWant) {
+						return e.ID.String()
+					}
+				}
+				return ""
+			}
+			for attempt := 0; attempt < 5; attempt++ {
+				entries, listErr := c.ListAll(ctx, parentID)
+				if listErr != nil {
+					if attempt == 0 {
+						return "", fmt.Errorf("create folder failed: %s (%s)", resp.Status, string(bb))
+					}
+					break
+				}
+				if id := tryFind(entries); id != "" {
+					return id, nil
+				}
+				if attempt < 4 {
+					backoff := time.Duration(200*(1<<uint(attempt))) * time.Millisecond // 200, 400, 800, 1600 ms
+					select {
+					case <-ctx.Done():
+						return "", ctx.Err()
+					case <-time.After(backoff):
+					}
+				}
+			}
+			// Last resort: some APIs return more per page when requested (e.g. 1000).
+			if large, _, err := c.listPageByName(ctx, parentID, 1, 1000); err == nil {
+				if id := tryFind(large); id != "" {
+					return id, nil
+				}
+			}
+			// Fallback: list by updated_at desc (newest first). The "already exists" folder may
+			// appear in the first page when sorted by recent activity, even if name-sorted list is capped.
+			for page := 1; page <= 3; page++ {
+				byUpdated, _, err := c.ListPage(ctx, parentID, page, 100)
+				if err != nil || len(byUpdated) == 0 {
+					break
+				}
+				if id := tryFind(byUpdated); id != "" {
+					return id, nil
+				}
+				if len(byUpdated) < 100 {
+					break
+				}
+			}
+		}
 		return "", fmt.Errorf("create folder failed: %s (%s)", resp.Status, string(bb))
 	}
 	var out CreateFolderResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bb, &out); err != nil {
 		return "", err
 	}
 	return out.Folder.ID.String(), nil
@@ -203,6 +360,8 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 
 // EnsureFolderPath resolves path (e.g. "a/b/c") to a folder ID, creating missing parents.
 // baseFolderID is the root folder ID to start from (e.g. from List("")).
+// Concurrent calls for the same parent+segment are serialized and cached so only one
+// goroutine creates a given folder; others wait and reuse the result.
 func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string) (string, error) {
 	if path == "" || path == "." {
 		return baseFolderID, nil
@@ -210,29 +369,90 @@ func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string
 	parts := splitPath(path)
 	currentID := baseFolderID
 	for _, name := range parts {
-		entries, err := c.List(ctx, currentID)
-		if err != nil {
-			return "", err
-		}
-		var foundID string
-		for _, e := range entries {
-			if e.Type == "folder" && e.Name == name {
-				foundID = e.ID.String()
-				break
-			}
-		}
-		if foundID != "" {
-			currentID = foundID
-			continue
-		}
-		// create folder
-		id, err := c.CreateFolder(ctx, name, currentID)
+		encoded := encodeSegment(name)
+		id, err := c.ensureFolder(ctx, currentID, name, encoded)
 		if err != nil {
 			return "", err
 		}
 		currentID = id
 	}
 	return currentID, nil
+}
+
+// ensureFolder resolves or creates a single folder segment under parentID.
+// Uses per-key locking and caching so concurrent callers for the same (parentID, name)
+// don't race and only one goroutine issues the create.
+func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encoded string) (string, error) {
+	cacheKey := parentID + "\x00" + encoded
+
+	// Fast path: already resolved.
+	if cached, ok := c.folderCache.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
+
+	// Acquire a per-key mutex so only one goroutine resolves this segment.
+	muIface, _ := c.folderLocks.LoadOrStore(cacheKey, &sync.Mutex{})
+	mu := muIface.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Double-check after acquiring lock.
+	if cached, ok := c.folderCache.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
+
+	// List parent and look for existing folder.
+	entries, err := c.ListAll(ctx, parentID)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Type != "folder" {
+			continue
+		}
+		ename := e.Name.String()
+		en := strings.TrimSpace(ename)
+		decoded := decodeSegment(ename)
+		if ename == encoded || en == strings.TrimSpace(encoded) || decoded == originalName ||
+			strings.EqualFold(en, encoded) || strings.EqualFold(decoded, originalName) {
+			c.folderCache.Store(cacheKey, e.ID.String())
+			return e.ID.String(), nil
+		}
+	}
+
+	// Not found; create it.
+	id, err := c.CreateFolder(ctx, encoded, parentID)
+	if err != nil {
+		return "", err
+	}
+	c.folderCache.Store(cacheKey, id)
+	return id, nil
+}
+
+// folderFortMinNameLen is FolderFort's minimum folder name length (API returns 422 if shorter).
+const folderFortMinNameLen = 3
+
+// encodeSegment returns a name safe for FolderFort (at least folderFortMinNameLen chars).
+// Short segments are padded with leading underscores (e.g. "14" -> "_14", "1" -> "__1").
+func encodeSegment(s string) string {
+	if len(s) >= folderFortMinNameLen {
+		return s
+	}
+	return strings.Repeat("_", folderFortMinNameLen-len(s)) + s
+}
+
+// decodeSegment reverses encodeSegment for path segments returned by the API.
+func decodeSegment(s string) string {
+	if len(s) != folderFortMinNameLen || folderFortMinNameLen == 0 {
+		return s
+	}
+	if s[0] != '_' {
+		return s
+	}
+	if folderFortMinNameLen > 1 && s[1] == '_' {
+		return s[2:] // "__x" -> "x"
+	}
+	return s[1:] // "_xy" -> "xy"
 }
 
 func splitPath(p string) []string {
@@ -260,12 +480,12 @@ func splitSlash(p string) []string {
 // RootFolderID returns the first folder at root to use as "base" (or creates one named baseName).
 // If baseName is empty, returns the first root folder ID if any, else error.
 func (c *Client) RootFolderID(ctx context.Context, baseName string) (string, error) {
-	entries, err := c.List(ctx, "")
+	entries, err := c.ListAll(ctx, "")
 	if err != nil {
 		return "", err
 	}
 	for _, e := range entries {
-		if e.Type == "folder" && (baseName == "" || e.Name == baseName) {
+		if e.Type == "folder" && (baseName == "" || e.Name.String() == baseName) {
 			return e.ID.String(), nil
 		}
 	}
@@ -397,14 +617,15 @@ const defaultMaxRetries = 3
 func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string) (files map[string]FileEntryResponse, folders map[string]string, err error) {
 	files = make(map[string]FileEntryResponse)
 	folders = make(map[string]string)
-	entries, err := c.List(ctx, folderID)
+	entries, err := c.ListAll(ctx, folderID)
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, e := range entries {
-		fullPath := e.Name
+		decodedName := decodeSegment(e.Name.String())
+		fullPath := decodedName
 		if prefix != "" {
-			fullPath = prefix + "/" + e.Name
+			fullPath = prefix + "/" + decodedName
 		}
 		if e.Type == "folder" {
 			folders[fullPath] = e.ID.String()
@@ -456,6 +677,11 @@ func (c *Client) UploadFile(ctx context.Context, parentID, name, mime, extension
 		return "", err
 	}
 	err = retryWithBackoff(ctx, defaultMaxRetries, func() error {
+		if s, ok := body.(io.Seeker); ok {
+			if _, seekErr := s.Seek(0, io.SeekStart); seekErr != nil {
+				return seekErr
+			}
+		}
 		return c.UploadToS3(ctx, pres.URL, pres.ACL, mime, size, body)
 	})
 	if err != nil {

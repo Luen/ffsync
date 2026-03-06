@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ffsync/ffsync/internal/client"
-	"github.com/ffsync/ffsync/internal/config"
 	"github.com/ffsync/ffsync/internal/remote"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +21,7 @@ func LsCmd() *cobra.Command {
 			if len(args) > 0 {
 				spec = args[0]
 			}
-			name, path, err := remote.ParseRemote(spec)
+			name, _, err := remote.ParseRemote(spec)
 			if err != nil {
 				return err
 			}
@@ -31,35 +29,15 @@ func LsCmd() *cobra.Command {
 				return fmt.Errorf("only remote is supported, got %q", name)
 			}
 
-			cfg, err := config.Load()
+			ctx := context.Background()
+			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
+			_, cl, baseFolderID, err := AuthClient(ctx, spec, noCookieStore)
 			if err != nil {
-				return err
-			}
-			if cfg.Email == "" || cfg.Password == "" {
-				fmt.Fprintln(os.Stderr, "Not configured. Run: ffsync config init && ffsync config set email <e> password <p>")
-				os.Exit(2)
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(ExitAuth)
 			}
 
-			cl, err := client.New(cfg.BaseURL)
-			if err != nil {
-				return err
-			}
-			if err := cl.Login(context.Background(), cfg.Email, cfg.Password); err != nil {
-				fmt.Fprintln(os.Stderr, "Login failed:", err)
-				os.Exit(2)
-			}
-
-			var folderID string
-			if path == "" {
-				folderID = ""
-			} else {
-				folderID, err = cl.EnsureFolderPath(context.Background(), "", path)
-				if err != nil {
-					return err
-				}
-			}
-
-			entries, err := cl.List(context.Background(), folderID)
+			entries, err := cl.List(ctx, baseFolderID)
 			if err != nil {
 				return err
 			}
@@ -68,11 +46,12 @@ func LsCmd() *cobra.Command {
 				if e.Type == "folder" {
 					prefix = "d"
 				}
-				fmt.Printf("%s %s\n", prefix, e.Name)
+				fmt.Printf("%s %s\n", prefix, e.Name.String())
 			}
 			return nil
 		},
 	}
+	_ = recurse
 	c.Flags().BoolVarP(&recurse, "recurse", "R", false, "List recursively (future)")
 	return c
 }

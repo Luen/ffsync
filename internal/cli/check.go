@@ -31,7 +31,8 @@ func CheckCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			_, cl, baseFolderID, err := AuthClient(ctx, remoteSpec)
+			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
+			_, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)

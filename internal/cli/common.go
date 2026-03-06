@@ -21,8 +21,9 @@ const (
 	ExitError   = 3
 )
 
-// AuthClient loads config, creates client, logs in, and returns base folder ID for the remote path.
-func AuthClient(ctx context.Context, remoteSpec string) (cfg *config.Config, cl *client.Client, baseFolderID string, err error) {
+// AuthClient loads config, creates client, ensures session (reusing stored cookies or logging in), and returns base folder ID for the remote path.
+// If noCookieStore is true, no cookie file is used (in-memory only for this run).
+func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool) (cfg *config.Config, cl *client.Client, baseFolderID string, err error) {
 	cfg, err = config.Load()
 	if err != nil {
 		return nil, nil, "", err
@@ -30,13 +31,29 @@ func AuthClient(ctx context.Context, remoteSpec string) (cfg *config.Config, cl 
 	if cfg.Email == "" || cfg.Password == "" {
 		return nil, nil, "", fmt.Errorf("not configured: set email and password (ffsync config set email ... password ...)")
 	}
-	cl, err = client.New(cfg.BaseURL)
+	cookiePath := ""
+	if !noCookieStore {
+		cookiePath = filepath.Join(cfg.StateDir, "cookies.json")
+	}
+	cl, err = client.New(cfg.BaseURL, cookiePath)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
-		slog.Error("login failed", "err", err)
-		return nil, nil, "", err
+	// With persistent store: try reusing session (List root). Otherwise or on error, login.
+	if cookiePath != "" {
+		if _, tryErr := cl.List(ctx, ""); tryErr == nil {
+			// session valid, skip login
+		} else {
+			if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
+				slog.Error("login failed", "err", err)
+				return nil, nil, "", err
+			}
+		}
+	} else {
+		if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
+			slog.Error("login failed", "err", err)
+			return nil, nil, "", err
+		}
 	}
 	_, remotePath, err := remote.ParseRemote(remoteSpec)
 	if err != nil {

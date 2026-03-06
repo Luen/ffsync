@@ -29,6 +29,32 @@ func (s *FlexID) UnmarshalJSON(data []byte) error {
 // String returns the ID as a string.
 func (s FlexID) String() string { return string(s) }
 
+// FlexName unmarshals from JSON number or string (FolderFort may return numeric folder names as numbers).
+type FlexName string
+
+// UnmarshalJSON accepts either a number or a quoted string.
+func (s *FlexName) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		*s = FlexName(str)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*s = FlexName(n.String())
+	return nil
+}
+
+func (s FlexName) String() string { return string(s) }
+
 // LoginRequest is sent to POST /auth/login.
 type LoginRequest struct {
 	Email    string `json:"email"`
@@ -38,9 +64,9 @@ type LoginRequest struct {
 
 // FileEntryResponse is one entry from GET /api/v1/drive/file-entries.
 type FileEntryResponse struct {
-	ID        FlexID `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"` // "folder" or file
+	ID        FlexID   `json:"id"`
+	Name      FlexName `json:"name"` // API may return numeric folder names as number
+	Type      string   `json:"type"` // "folder" or file
 	Size      int64  `json:"size"`
 	Mime      string `json:"mime"`
 	Extension string `json:"extension"`
@@ -48,8 +74,13 @@ type FileEntryResponse struct {
 }
 
 // FileEntriesResponse is the response from file-entries API.
+// Pagination meta is optional (Laravel-style APIs may include it).
 type FileEntriesResponse struct {
 	Data []FileEntryResponse `json:"data"`
+	Meta *struct {
+		LastPage *int `json:"last_page"`
+		Total    *int `json:"total"`
+	} `json:"meta,omitempty"`
 }
 
 // CreateFolderRequest is sent to POST /api/v1/folders.

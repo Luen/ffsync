@@ -15,6 +15,7 @@ func main() {
 	}
 	root.PersistentFlags().String("config", "", "Config file (default: FOLDERFORT_CONFIG or ~/.config/ffsync/ffsync.conf)")
 	root.PersistentFlags().BoolP("verbose", "v", false, "Verbose output")
+	root.PersistentFlags().Bool("no-cookie-store", false, "Do not read or write cookies to disk (one-off run, in-memory only)")
 	_ = root.PersistentFlags().MarkHidden("config")
 
 	root.AddCommand(cli.VersionCmd())
