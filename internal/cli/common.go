@@ -27,7 +27,7 @@ const (
 
 // AuthClient loads config, creates client, ensures session (reusing stored cookies or logging in), and returns base folder ID for the remote path.
 // If noCookieStore is true, no cookie file is used (in-memory only for this run).
-// If showProgress is true, session-check and login messages are printed to stderr (e.g. when sync uses --progress or --stats).
+// If showProgress is true, session-check and login messages are printed to stderr (e.g. when sync uses --progress).
 func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool, showProgress bool) (cfg *config.Config, cl *client.Client, baseFolderID string, err error) {
 	cfg, err = config.Load()
 	if err != nil {
@@ -73,7 +73,7 @@ func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool, show
 	if err != nil {
 		return nil, nil, "", err
 	}
-	baseFolderID, err = cl.EnsureFolderPath(ctx, "", remotePath)
+	baseFolderID, err = cl.EnsureFolderPath(ctx, "", remotePath, nil)
 	if err != nil {
 		return nil, nil, "", err
 	}

@@ -363,17 +363,27 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 // baseFolderID is the root folder ID to start from (e.g. from List("")).
 // Concurrent calls for the same parent+segment are serialized and cached so only one
 // goroutine creates a given folder; others wait and reuse the result.
-func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string) (string, error) {
+// If onFolderCreated is non-nil, it is called for each path segment that was created (e.g. "a", "a/b").
+func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string, onFolderCreated func(createdPath string)) (string, error) {
 	if path == "" || path == "." {
 		return baseFolderID, nil
 	}
 	parts := splitPath(path)
 	currentID := baseFolderID
+	var currentPath string
 	for _, name := range parts {
 		encoded := encodeSegment(name)
-		id, err := c.ensureFolder(ctx, currentID, name, encoded)
+		id, created, err := c.ensureFolder(ctx, currentID, name, encoded)
 		if err != nil {
 			return "", err
+		}
+		if currentPath == "" {
+			currentPath = name
+		} else {
+			currentPath = currentPath + "/" + name
+		}
+		if created && onFolderCreated != nil {
+			onFolderCreated(currentPath)
 		}
 		currentID = id
 	}
@@ -381,14 +391,15 @@ func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string
 }
 
 // ensureFolder resolves or creates a single folder segment under parentID.
+// Returns (folderID, created bool, error). created is true only when the folder was created by this call.
 // Uses per-key locking and caching so concurrent callers for the same (parentID, name)
 // don't race and only one goroutine issues the create.
-func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encoded string) (string, error) {
+func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encoded string) (string, bool, error) {
 	cacheKey := parentID + "\x00" + encoded
 
 	// Fast path: already resolved.
 	if cached, ok := c.folderCache.Load(cacheKey); ok {
-		return cached.(string), nil
+		return cached.(string), false, nil
 	}
 
 	// Acquire a per-key mutex so only one goroutine resolves this segment.
@@ -399,13 +410,13 @@ func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encod
 
 	// Double-check after acquiring lock.
 	if cached, ok := c.folderCache.Load(cacheKey); ok {
-		return cached.(string), nil
+		return cached.(string), false, nil
 	}
 
 	// List parent and look for existing folder.
 	entries, err := c.ListAll(ctx, parentID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	for _, e := range entries {
 		if e.Type != "folder" {
@@ -417,17 +428,17 @@ func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encod
 		if ename == encoded || en == strings.TrimSpace(encoded) || decoded == originalName ||
 			strings.EqualFold(en, encoded) || strings.EqualFold(decoded, originalName) {
 			c.folderCache.Store(cacheKey, e.ID.String())
-			return e.ID.String(), nil
+			return e.ID.String(), false, nil
 		}
 	}
 
 	// Not found; create it.
 	id, err := c.CreateFolder(ctx, encoded, parentID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	c.folderCache.Store(cacheKey, id)
-	return id, nil
+	return id, true, nil
 }
 
 // folderFortMinNameLen is FolderFort's minimum folder name length (API returns 422 if shorter).

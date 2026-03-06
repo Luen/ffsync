@@ -126,6 +126,18 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 			outputMu.Unlock()
 		}
 	}
+	var onFolderCreated func(string)
+	if opts.ProgressWriter != nil && opts.ProgressFiles {
+		onFolderCreated = func(path string) {
+			outputMu.Lock()
+			clearStats()
+			fmt.Fprintf(opts.ProgressWriter, "Created folder: %s\n", path)
+			if opts.StatsInterval > 0 {
+				printStats()
+			}
+			outputMu.Unlock()
+		}
+	}
 
 	// One-line stats (rclone/rsync --info=progress2 style)
 	statsQuit := make(chan struct{})
@@ -169,7 +181,7 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			}
-			runUpload(ctx, cl, localRoot, baseFolderID, f, state, &stateMu, nil, !opts.DeleteToTrash, onUploadDone)
+			runUpload(ctx, cl, localRoot, baseFolderID, f, state, &stateMu, nil, !opts.DeleteToTrash, onFolderCreated, onUploadDone)
 		}()
 	}
 	for _, u := range p.Update {
@@ -183,7 +195,7 @@ func Execute(ctx context.Context, p *plan.Plan, cl *client.Client, localRoot, ba
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			}
-			runUpload(ctx, cl, localRoot, baseFolderID, u.Local, state, &stateMu, &u.RemoteID, !opts.DeleteToTrash, onUploadDone)
+			runUpload(ctx, cl, localRoot, baseFolderID, u.Local, state, &stateMu, &u.RemoteID, !opts.DeleteToTrash, onFolderCreated, onUploadDone)
 		}()
 	}
 	wg.Wait()
@@ -273,13 +285,13 @@ func formatDuration(sec float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-func runUpload(ctx context.Context, cl *client.Client, localRoot, baseFolderID string, f local.File, state *local.State, stateMu *sync.Mutex, deleteAfterID *string, deleteForever bool, onDone func(path string, bytes int64)) {
+func runUpload(ctx context.Context, cl *client.Client, localRoot, baseFolderID string, f local.File, state *local.State, stateMu *sync.Mutex, deleteAfterID *string, deleteForever bool, onFolderCreated func(string), onDone func(path string, bytes int64)) {
 	parentPath := filepath.Dir(f.Path)
 	if parentPath == "." {
 		parentPath = ""
 	}
 	parentPath = filepath.ToSlash(parentPath)
-	parentID, err := cl.EnsureFolderPath(ctx, baseFolderID, parentPath)
+	parentID, err := cl.EnsureFolderPath(ctx, baseFolderID, parentPath, onFolderCreated)
 	if err != nil {
 		slog.Error("ensure folder", "path", parentPath, "err", err)
 		return

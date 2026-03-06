@@ -43,10 +43,10 @@ func SyncCmd() *cobra.Command {
 			noCookieStore, _ := cmd.Root().Flags().GetBool("no-cookie-store")
 			showProgress := progressFiles || (cmd.Flags().Changed("stats") && statsInterval != "" && statsInterval != "0")
 			var progressWriter io.Writer
-			if showProgress {
+			if progressFiles {
 				progressWriter = os.Stderr
 			}
-			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore, showProgress)
+			cfg, cl, baseFolderID, err := AuthClient(ctx, remoteSpec, noCookieStore, progressFiles)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(ExitAuth)
