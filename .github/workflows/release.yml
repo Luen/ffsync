@@ -31,36 +31,36 @@ jobs:
                   echo "version=$VERSION" >> $GITHUB_OUTPUT
                   echo "Building version $VERSION"
 
-      - name: Generate release notes
-        id: notes
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          # GitHub-generated notes (merged PRs, contributors, etc.) – optional
-          GENERATED=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG_NAME" \
-            -f target_commitish="${{ github.sha }}" \
-            -q '.body' 2>/dev/null)
+            - name: Generate release notes
+              id: notes
+              env:
+                  TAG_NAME: ${{ github.ref_name }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set +e
+                  # GitHub-generated notes (merged PRs, contributors, etc.) – optional
+                  GENERATED=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+                    -f tag_name="$TAG_NAME" \
+                    -f target_commitish="${{ github.sha }}" \
+                    -q '.body' 2>/dev/null)
 
-          # Previous tag for commit range (empty on first release)
-          PREV=$(git tag --sort=-v:refname | while read t; do [ "$t" != "$TAG_NAME" ] && echo "$t" && break; done)
-          if [ -n "$PREV" ]; then
-            COMMITS=$(git log "$PREV..HEAD" --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          fi
+                  # Previous tag for commit range (empty on first release)
+                  PREV=$(git tag --sort=-v:refname | while read t; do [ "$t" != "$TAG_NAME" ] && echo "$t" && break; done)
+                  if [ -n "$PREV" ]; then
+                    COMMITS=$(git log "$PREV..HEAD" --pretty=format:"- %s (%h)" --no-merges)
+                  else
+                    COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+                  fi
 
-          set -e
-          # Combine: generated notes + full commit list
-          {
-            echo "$GENERATED"
-            echo ""
-            echo "## Commits"
-            echo ""
-            echo "$COMMITS"
-          } > release_notes.md
+                  set -e
+                  # Combine: generated notes + full commit list
+                  {
+                    echo "$GENERATED"
+                    echo ""
+                    echo "## Commits"
+                    echo ""
+                    echo "$COMMITS"
+                  } > release_notes.md
 
             - name: Build
               env:
