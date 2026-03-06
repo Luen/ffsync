@@ -111,21 +111,22 @@ func runSelfupdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Windows: cannot replace running exe. Write a batch that runs after we exit.
+	// Windows: cannot replace running exe. Spawn a batch that waits for this process to exit, then replaces the binary.
 	batchPath := filepath.Join(dir, "ffsync-update.bat")
-	batchContent := fmt.Sprintf("@echo off\nping -n 3 127.0.0.1 >nul\ndel %q\nren %q %s\nexit\n",
+	// Batch receives our PID as %1; loops until that process is gone, then replaces the exe (no fixed delay)
+	batchContent := fmt.Sprintf("@echo off\n:wait\ntasklist /fi \"pid eq %%1\" 2>nul | find /i \"%%1\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\ndel %q\nren %q %s\nexit\n",
 		exePath, newPath, filepath.Base(exePath))
 	if err := os.WriteFile(batchPath, []byte(batchContent), 0600); err != nil {
 		os.Remove(newPath)
 		return fmt.Errorf("write update script: %w", err)
 	}
-	// Run batch in background (detached) so it runs after we exit
-	if err := runDetached(batchPath); err != nil {
+	myPID := os.Getpid()
+	if err := runDetached(batchPath, fmt.Sprint(myPID)); err != nil {
 		os.Remove(newPath)
 		os.Remove(batchPath)
 		return fmt.Errorf("start update script: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Update downloaded. Exit this process and run 'ffsync' again to complete the update (%s).\n", rel.TagName)
+	fmt.Fprintf(os.Stderr, "Update will apply when this process exits. Run 'ffsync version' to confirm %s.\n", rel.TagName)
 	return nil
 }
 
@@ -171,8 +172,9 @@ func downloadFile(url, path string) error {
 	return err
 }
 
-// runDetached runs the batch script in the background so it executes after we exit (Windows).
-func runDetached(batchPath string) error {
-	cmd := exec.Command("cmd", "/c", "start", "/b", "", batchPath)
+// runDetached runs the batch script in a minimized window with the given args (e.g. PID to wait for).
+func runDetached(batchPath string, args ...string) error {
+	// /min = minimized window so the batch survives closing the parent terminal
+	cmd := exec.Command("cmd", append([]string{"/c", "start", "/min", "", batchPath}, args...)...)
 	return cmd.Start()
 }
