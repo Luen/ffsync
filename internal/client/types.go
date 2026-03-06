@@ -65,12 +65,13 @@ type LoginRequest struct {
 // FileEntryResponse is one entry from GET /api/v1/drive/file-entries.
 type FileEntryResponse struct {
 	ID        FlexID   `json:"id"`
+	Hash      string   `json:"hash"` // folder hash (e.g. NDQ5NjcyMHxwYQ); use for folderId in list requests like the web app
 	Name      FlexName `json:"name"` // API may return numeric folder names as number
 	Type      string   `json:"type"` // "folder" or file
-	Size      int64  `json:"size"`
-	Mime      string `json:"mime"`
-	Extension string `json:"extension"`
-	UpdatedAt string `json:"updated_at"`
+	Size      int64    `json:"size"`
+	Mime      string   `json:"mime"`
+	Extension string   `json:"extension"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 // FileEntriesResponse is the response from file-entries API.

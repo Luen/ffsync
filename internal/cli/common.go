@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,16 +45,23 @@ func AuthClient(ctx context.Context, remoteSpec string, noCookieStore bool, show
 	if err != nil {
 		return nil, nil, "", err
 	}
-	// With persistent store: try reusing session (List root). Otherwise or on error, login.
+	// With persistent store: try reusing session (lightweight SpaceUsage check). Otherwise or on error, login.
 	if cookiePath != "" {
 		if showProgress {
 			fmt.Fprintln(os.Stderr, "Checking session...")
 		}
-		if _, tryErr := cl.List(ctx, ""); tryErr == nil {
+		sessionCheckCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, tryErr := cl.SpaceUsage(sessionCheckCtx)
+		cancel()
+		if tryErr == nil {
 			// session valid, skip login
 		} else {
 			if showProgress {
-				fmt.Fprintln(os.Stderr, "Session not found, invalid, or expired. Logging in.")
+				if errors.Is(tryErr, context.DeadlineExceeded) {
+					fmt.Fprintln(os.Stderr, "Session check timed out. Logging in.")
+				} else {
+					fmt.Fprintln(os.Stderr, "Session not found, invalid, or expired. Logging in.")
+				}
 			}
 			if err := cl.Login(ctx, cfg.Email, cfg.Password); err != nil {
 				slog.Error("login failed", "err", err)

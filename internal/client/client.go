@@ -55,7 +55,8 @@ func New(baseURL string, cookieFile string) (*Client, error) {
 	return &Client{
 		BaseURL: baseURL,
 		HTTPClient: &http.Client{
-			Jar: jar,
+			Jar:     jar,
+			Timeout: 20 * time.Second,
 			Transport: &http.Transport{
 				// allow cancellation and timeouts
 			},
@@ -156,13 +157,13 @@ func (c *Client) Login(ctx context.Context, email, password string) error {
 	return nil
 }
 
-// List returns the first page of file entries for a folder. Use ListAll to get every entry (e.g. before creating a folder).
+// List returns the first page of file entries for a folder (same request as web: no per_page, server returns 50).
 func (c *Client) List(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
-	entries, _, err := c.ListPage(ctx, folderID, 1, 100)
+	entries, _, err := c.ListPage(ctx, folderID, 1, 0)
 	return entries, err
 }
 
-// ListPage returns one page of file entries. page is 1-based; perPage is the page size.
+// ListPage returns one page of file entries. page is 1-based; perPage is the page size (omit 0 to match web: no per_page in URL, server defaults to 50).
 // Returns (entries, lastPage). If the API does not return pagination meta, lastPage is 1.
 func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage int) ([]FileEntryResponse, int, error) {
 	u, _ := url.Parse(c.base() + "/api/v1/drive/file-entries")
@@ -173,7 +174,9 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 	q.Set("orderBy", "updated_at")
 	q.Set("orderDir", "desc")
 	q.Set("page", strconv.Itoa(page))
-	q.Set("per_page", strconv.Itoa(perPage))
+	if perPage > 0 {
+		q.Set("per_page", strconv.Itoa(perPage))
+	}
 	u.RawQuery = q.Encode()
 
 	req, err := c.authReq(ctx, http.MethodGet, u.Path+"?"+u.RawQuery, nil)
@@ -184,6 +187,8 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 	req.Method = http.MethodGet
 	req.Body = nil
 	req.GetBody = nil
+	// Match web app: Referer is the folder URL (server may use it for routing/cache).
+	req.Header.Set("Referer", c.base()+"/drive/folders/"+folderID)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -206,21 +211,18 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 }
 
 // ListAll returns all file entries for a folder, fetching every page so no existing folder is missed.
-// Uses orderBy=name for stable pagination. Uses perPage=50 because the FolderFort API caps at 50;
-// we stop only when we receive fewer than perPage results (so we don't rely on last_page).
+// Uses same query as web app (no per_page in URL; server defaults to 50) and Referer /drive/folders/{folderId}.
 func (c *Client) ListAll(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
-	const perPage = 50
+	const defaultPageSize = 50 // server default when per_page omitted
 	var all []FileEntryResponse
 	page := 1
 	for {
-		entries, _, err := c.listPageByName(ctx, folderID, page, perPage)
+		entries, lastPage, err := c.ListPage(ctx, folderID, page, 0) // 0 = omit per_page to match web
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, entries...)
-		// Stop only when we got a partial or empty page. Do NOT use lastPage — FolderFort
-		// reports last_page=1 when it caps at 50, so we would otherwise never fetch page 2+.
-		if len(entries) == 0 || len(entries) < perPage {
+		if len(entries) == 0 || page >= lastPage || len(entries) < defaultPageSize {
 			break
 		}
 		page++
@@ -337,15 +339,16 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 			}
 			// Fallback: list by updated_at desc (newest first). The "already exists" folder may
 			// appear in the first page when sorted by recent activity, even if name-sorted list is capped.
+			const defaultPageSize = 50
 			for page := 1; page <= 3; page++ {
-				byUpdated, _, err := c.ListPage(ctx, parentID, page, 100)
+				byUpdated, _, err := c.ListPage(ctx, parentID, page, 0)
 				if err != nil || len(byUpdated) == 0 {
 					break
 				}
 				if id := tryFind(byUpdated); id != "" {
 					return id, nil
 				}
-				if len(byUpdated) < 100 {
+				if len(byUpdated) < defaultPageSize {
 					break
 				}
 			}
@@ -670,6 +673,8 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, pro
 		folders map[string]string
 		err     error
 	}
+	// No per-folder timeout: large folders (e.g. years_1/all with many pages) need time to finish.
+	// Each HTTP request uses the client's timeout (20s), so a single stuck request will fail.
 	resultCh := make(chan subResult, len(subfolders))
 	for _, sf := range subfolders {
 		entry, fullPath := sf.entry, sf.fullPath
@@ -681,7 +686,14 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, pro
 				resultCh <- subResult{err: ctx.Err()}
 				return
 			}
-			subFiles, subFolders, listErr := c.ListRecursive(ctx, entry.ID.String(), fullPath, progress)
+			folderID := entry.Hash
+			if folderID == "" {
+				folderID = entry.ID.String()
+			}
+			subFiles, subFolders, listErr := c.ListRecursive(ctx, folderID, fullPath, progress)
+			if listErr != nil && fullPath != "" {
+				listErr = fmt.Errorf("list folder %q: %w", fullPath, listErr)
+			}
 			resultCh <- subResult{files: subFiles, folders: subFolders, err: listErr}
 		}()
 	}
