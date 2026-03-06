@@ -10,7 +10,7 @@ import (
 )
 
 // DefaultExclude is applied when no exclude list is given (skip VCS and state).
-var DefaultExclude = []string{".git", ".ffsync", ".ffsync.lock", ".ffsync.*"}
+var DefaultExclude = []string{".git", ".ffsync", ".ffsync.lock", ".ffsync-state", ".ffsync.*"}
 
 // Scan walks the local tree and returns a map path -> File (path normalised with /).
 // include/exclude are glob patterns (forward slash); default exclude skips .git, .ffsync.

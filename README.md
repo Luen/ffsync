@@ -12,7 +12,7 @@ A reliable, single-binary Go CLI that syncs a local directory to [FolderFort](ht
 
 1. **Download** the latest binary for your OS and CPU from [Releases](https://github.com/ffsync/ffsync/releases).
 2. **Extract** the executable (`ffsync` or `ffsync.exe` on Windows) and put it somewhere on your PATH.
-3. **Configure** once with `ffsync config init` and `ffsync config set email ... password ...` (see [Configuration](#configuration)).
+3. **Configure** once with `ffsync config init`, then `ffsync config set email <your@email>` and `ffsync config set password <yourpassword>` (see [Configuration](#configuration)).
 4. **Sync** with `ffsync sync <local_dir> remote:<path>`.
 
 ### Windows
