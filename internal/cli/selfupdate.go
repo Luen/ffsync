@@ -115,20 +115,28 @@ func runSelfupdate(cmd *cobra.Command, args []string) error {
 	// Use "start /b cmd /c batch" so the batch runs in a process that is not our child and survives when we exit.
 	myPID := os.Getpid()
 	batchPath := filepath.Join(dir, "ffsync-update.bat")
+	cleanupPath := filepath.Join(dir, "ffsync-update-cleanup.bat")
 	logPath := filepath.Join(dir, "ffsync-update.log")
 	// Use rename (not delete): ren exe .old then ren .new exe. Rename often works when del fails (e.g. AV lock).
 	oldName := filepath.Base(exePath) + ".old"
-	// Deferred cleanup: a background cmd sleeps then deletes .bat and .log so the batch can exit first (batch can't delete itself while running).
 	// Use %s for paths so backslashes are not doubled (Go's %q would produce C:\\... and break ren/del).
 	exeOld := exePath + ".old"
-	batchContent := fmt.Sprintf("@echo off\nsetlocal enabledelayedexpansion\nset PID=%d\nset LOG=%s\n(echo [%%date%% %%time%%] Update started, waiting for PID %%PID%%)>>%%LOG%%\n:wait\ntasklist /fi \"pid eq %%PID%%\" 2>nul | find \"%%PID%%\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\n(echo [%%date%% %%time%%] Process gone, delaying then replacing)>>%%LOG%%\nping -n 4 127.0.0.1 >nul\nset tries=0\n:renretry\nren \"%s\" %s 2>nul\nif exist \"%s\" (set /a tries+=1\nif !tries! geq 25 (echo [%%date%% %%time%%] ren old failed after 25 tries)>>%%LOG%% & exit /b 1\nping -n 2 127.0.0.1 >nul & goto renretry)\nren \"%s\" %s\n(echo [%%date%% %%time%%] Done - update applied. Run ffsync version to confirm.)>>%%LOG%%\ndel /f /q \"%s\" 2>nul\nstart /b cmd /c \"ping -n 2 127.0.0.1 >nul & del /f /q \\\"%s\\\" & del /f /q \\\"%s\\\"\"\nexit\n",
-		myPID, logPath, exePath, oldName, exePath, newPath, filepath.Base(exePath), exeOld, batchPath, logPath)
+	// Deferred cleanup: write a small helper batch that sleeps then deletes main .bat, .log, and itself. Avoids nested quoting in one line.
+	cleanupContent := fmt.Sprintf("@echo off\nping -n 2 127.0.0.1 >nul\ndel /f /q \"%s\" 2>nul\ndel /f /q \"%s\" 2>nul\ndel /f /q \"%%~f0\" 2>nul\n", batchPath, logPath)
+	if err := os.WriteFile(cleanupPath, []byte(cleanupContent), 0600); err != nil {
+		os.Remove(newPath)
+		return fmt.Errorf("write cleanup script: %w", err)
+	}
+	batchContent := fmt.Sprintf("@echo off\nsetlocal enabledelayedexpansion\nset PID=%d\nset LOG=%s\n(echo [%%date%% %%time%%] Update started, waiting for PID %%PID%%)>>%%LOG%%\n:wait\ntasklist /fi \"pid eq %%PID%%\" 2>nul | find \"%%PID%%\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\n(echo [%%date%% %%time%%] Process gone, delaying then replacing)>>%%LOG%%\nping -n 4 127.0.0.1 >nul\nset tries=0\n:renretry\nren \"%s\" %s 2>nul\nif exist \"%s\" (set /a tries+=1\nif !tries! geq 25 (echo [%%date%% %%time%%] ren old failed after 25 tries)>>%%LOG%% & exit /b 1\nping -n 2 127.0.0.1 >nul & goto renretry)\nren \"%s\" %s\n(echo [%%date%% %%time%%] Done - update applied. Run ffsync version to confirm.)>>%%LOG%%\ndel /f /q \"%s\" 2>nul\nstart /b cmd /c \"\"%s\"\"\nexit\n",
+		myPID, logPath, exePath, oldName, exePath, newPath, filepath.Base(exePath), exeOld, cleanupPath)
 	if err := os.WriteFile(batchPath, []byte(batchContent), 0600); err != nil {
 		os.Remove(newPath)
+		os.Remove(cleanupPath)
 		return fmt.Errorf("write update script: %w", err)
 	}
 	if err := runDetached(batchPath); err != nil {
 		os.Remove(newPath)
+		os.Remove(cleanupPath)
 		os.Remove(batchPath)
 		return fmt.Errorf("start update script: %w", err)
 	}
