@@ -144,6 +144,11 @@ type DeleteFileEntriesRequest struct {
 	EmptyTrash    bool     `json:"emptyTrash,omitempty"`
 }
 
+// StarRequest is sent to POST /api/v1/file-entries/star or /api/v1/file-entries/unstar.
+type StarRequest struct {
+	EntryIDs []string `json:"entryIds"`
+}
+
 // SpaceUsageResponse is the response from GET /api/v1/user/space-usage.
 type SpaceUsageResponse struct {
 	Used      int64  `json:"used"`

@@ -26,6 +26,8 @@ func main() {
 	root.AddCommand(cli.SyncCmd())
 	root.AddCommand(cli.CheckCmd())
 	root.AddCommand(cli.EmptyTrashCmd())
+	root.AddCommand(cli.StarCmd())
+	root.AddCommand(cli.UnstarCmd())
 	root.AddCommand(cli.SpaceCmd())
 	root.AddCommand(cli.SelfupdateCmd())
 

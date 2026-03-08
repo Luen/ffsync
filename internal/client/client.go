@@ -480,6 +480,61 @@ func (c *Client) EnsureFolderPath(ctx context.Context, baseFolderID, path string
 	return currentID, nil
 }
 
+// GetEntryID resolves a path under baseFolderID to the file or folder entry ID (numeric string).
+// Path is relative, e.g. "a/b/c". Returns the ID of the last segment (file or folder), or error if not found.
+func (c *Client) GetEntryID(ctx context.Context, baseFolderID, path string) (string, error) {
+	if path == "" || path == "." {
+		return "", fmt.Errorf("path is required")
+	}
+	parts := splitPath(path)
+	currentID := baseFolderID
+	for i, name := range parts {
+		encoded := encodeSegment(name)
+		entries, err := c.ListAll(ctx, currentID)
+		if err != nil {
+			return "", err
+		}
+		decodedWant := decodeSegment(name)
+		nameNorm := strings.TrimSpace(name)
+		displayWant := strings.TrimLeft(encoded, "_")
+		var found *FileEntryResponse
+		for j := range entries {
+			e := &entries[j]
+			ename := e.Name.String()
+			en := strings.TrimSpace(ename)
+			decoded := decodeSegment(ename)
+			if ename == encoded || en == nameNorm || decoded == decodedWant ||
+				strings.EqualFold(en, nameNorm) || strings.EqualFold(decoded, decodedWant) ||
+				ename == displayWant || decoded == displayWant || strings.EqualFold(decoded, displayWant) {
+				found = e
+				break
+			}
+			if nameNorm != "" && en != "" {
+				na, naErr := strconv.ParseInt(strings.TrimLeft(nameNorm, "0"), 10, 64)
+				ea, eaErr := strconv.ParseInt(strings.TrimLeft(en, "0"), 10, 64)
+				if naErr == nil && eaErr == nil && na == ea {
+					found = e
+					break
+				}
+			}
+		}
+		if found == nil {
+			return "", fmt.Errorf("not found: %s", path)
+		}
+		if i == len(parts)-1 {
+			return found.ID.String(), nil
+		}
+		if found.Type != "folder" {
+			return "", fmt.Errorf("not a folder: %s (path %s)", name, path)
+		}
+		currentID = found.ID.String()
+		if found.Hash != "" {
+			currentID = currentID + "," + found.Hash
+		}
+	}
+	return "", fmt.Errorf("path is required")
+}
+
 // ensureFolder resolves or creates a single folder segment under parentID.
 // Returns (folderID, created bool, error). created is true only when the folder was created by this call.
 // Uses per-key locking and caching so concurrent callers for the same (parentID, name)
@@ -889,6 +944,43 @@ func (c *Client) EmptyTrash(ctx context.Context) error {
 	if resp.StatusCode != http.StatusOK {
 		bb, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("empty trash failed: %s (%s)", resp.Status, string(bb))
+	}
+	return nil
+}
+
+// Star adds file/folder entries to starred (POST /api/v1/file-entries/star). entryIDs are numeric entry IDs.
+func (c *Client) Star(ctx context.Context, entryIDs []string) error {
+	return c.starUnstar(ctx, "/api/v1/file-entries/star", entryIDs)
+}
+
+// Unstar removes file/folder entries from starred (POST /api/v1/file-entries/unstar). entryIDs are numeric entry IDs.
+func (c *Client) Unstar(ctx context.Context, entryIDs []string) error {
+	return c.starUnstar(ctx, "/api/v1/file-entries/unstar", entryIDs)
+}
+
+func (c *Client) starUnstar(ctx context.Context, path string, entryIDs []string) error {
+	if len(entryIDs) == 0 {
+		return nil
+	}
+	body := StarRequest{EntryIDs: entryIDs}
+	raw, _ := json.Marshal(body)
+	req, err := c.authReq(ctx, http.MethodPost, path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Referer", c.base()+"/drive")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bb, _ := io.ReadAll(resp.Body)
+		action := "star"
+		if strings.HasSuffix(path, "unstar") {
+			action = "unstar"
+		}
+		return fmt.Errorf("%s failed: %s (%s)", action, resp.Status, string(bb))
 	}
 	return nil
 }

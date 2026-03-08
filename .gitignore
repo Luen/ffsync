@@ -31,3 +31,6 @@ go.work.sum
 .ffsync.lock
 .ffsync-state
 *.lock
+na.folderfort.com.har
+ffsync-update.bat
+ffsync.exe.new
