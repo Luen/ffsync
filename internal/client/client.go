@@ -237,17 +237,19 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 
 // ListAll returns all file entries for a folder, fetching every page so no existing folder is missed.
 // Uses same query as web app (no per_page in URL; server defaults to 50) and Referer /drive/folders/{folderId}.
+// Continues until a partial page is received; some APIs report last_page=1 even when more pages exist.
 func (c *Client) ListAll(ctx context.Context, folderID string) ([]FileEntryResponse, error) {
 	const defaultPageSize = 50 // server default when per_page omitted
 	var all []FileEntryResponse
 	page := 1
 	for {
-		entries, lastPage, err := c.ListPage(ctx, folderID, page, 0) // 0 = omit per_page to match web
+		entries, _, err := c.ListPage(ctx, folderID, page, 0) // 0 = omit per_page to match web
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, entries...)
-		if len(entries) == 0 || page >= lastPage || len(entries) < defaultPageSize {
+		// Stop only when we got no entries or a partial page (no more pages). Do not trust lastPage.
+		if len(entries) == 0 || len(entries) < defaultPageSize {
 			break
 		}
 		page++
@@ -413,16 +415,16 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 			if found != "" {
 				return found, nil
 			}
-			// Paginate by name so we can find the folder even in very large parents (e.g. years_1/all/14).
 			for page := 1; page <= 200; page++ {
-				byName, lastPage, err := c.listPageByName(ctx, parentID, page, 50)
+				byName, _, err := c.listPageByName(ctx, parentID, page, 50)
 				if err != nil || len(byName) == 0 {
 					break
 				}
 				if id := tryFind(byName); id != "" {
 					return id, nil
 				}
-				if page >= lastPage || len(byName) < 50 {
+				// Stop only on partial page; API may report last_page=1 incorrectly.
+				if len(byName) < 50 {
 					break
 				}
 			}
