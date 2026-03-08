@@ -69,6 +69,25 @@ func (c *Client) base() string {
 	return c.BaseURL
 }
 
+// folderIDForList returns the folder id to use in list API (file-entries?folderId=). Cache stores "numericId,hash"; list API expects hash. Web uses "0" for root.
+func folderIDForList(v string) string {
+	if v == "" {
+		return "0"
+	}
+	if i := strings.Index(v, ","); i >= 0 {
+		return v[i+1:]
+	}
+	return v
+}
+
+// folderIDForCreate returns the folder id to use in create/presign/entry APIs (parentId in body). Cache stores "numericId,hash"; create API expects integer.
+func folderIDForCreate(v string) string {
+	if i := strings.Index(v, ","); i >= 0 {
+		return v[:i]
+	}
+	return v
+}
+
 // xsrfToken reads XSRF-TOKEN from the cookie jar for the base URL.
 func (c *Client) xsrfToken() (string, error) {
 	u, err := url.Parse(c.base())
@@ -165,11 +184,13 @@ func (c *Client) List(ctx context.Context, folderID string) ([]FileEntryResponse
 
 // ListPage returns one page of file entries. page is 1-based; perPage is the page size (omit 0 to match web: no per_page in URL, server defaults to 50).
 // Returns (entries, lastPage). If the API does not return pagination meta, lastPage is 1.
+// folderID can be cache value "numericId,hash"; list API expects hash.
 func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage int) ([]FileEntryResponse, int, error) {
+	listID := folderIDForList(folderID)
 	u, _ := url.Parse(c.base() + "/api/v1/drive/file-entries")
 	q := u.Query()
 	q.Set("section", "folder")
-	q.Set("folderId", folderID)
+	q.Set("folderId", listID)
 	q.Set("workspaceId", "0")
 	q.Set("orderBy", "updated_at")
 	q.Set("orderDir", "desc")
@@ -187,8 +208,12 @@ func (c *Client) ListPage(ctx context.Context, folderID string, page, perPage in
 	req.Method = http.MethodGet
 	req.Body = nil
 	req.GetBody = nil
-	// Match web app: Referer is the folder URL (server may use it for routing/cache).
-	req.Header.Set("Referer", c.base()+"/drive/folders/"+folderID)
+	// Match web app: Referer /drive for root (folderId=0), /drive/folders/{id} otherwise.
+	if listID == "0" {
+		req.Header.Set("Referer", c.base()+"/drive")
+	} else {
+		req.Header.Set("Referer", c.base()+"/drive/folders/"+listID)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -232,10 +257,11 @@ func (c *Client) ListAll(ctx context.Context, folderID string) ([]FileEntryRespo
 
 // listPageByName is like ListPage but sorted by name (ascending) for stable pagination.
 func (c *Client) listPageByName(ctx context.Context, folderID string, page, perPage int) ([]FileEntryResponse, int, error) {
+	listID := folderIDForList(folderID)
 	u, _ := url.Parse(c.base() + "/api/v1/drive/file-entries")
 	q := u.Query()
 	q.Set("section", "folder")
-	q.Set("folderId", folderID)
+	q.Set("folderId", listID)
 	q.Set("workspaceId", "0")
 	q.Set("orderBy", "name")
 	q.Set("orderDir", "asc")
@@ -251,6 +277,11 @@ func (c *Client) listPageByName(ctx context.Context, folderID string, page, perP
 	req.Method = http.MethodGet
 	req.Body = nil
 	req.GetBody = nil
+	if listID == "0" {
+		req.Header.Set("Referer", c.base()+"/drive")
+	} else {
+		req.Header.Set("Referer", c.base()+"/drive/folders/"+listID)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -273,11 +304,13 @@ func (c *Client) listPageByName(ctx context.Context, folderID string, page, perP
 }
 
 // CreateFolder creates a folder under parentID (empty for root).
-// If the API returns 422 "Folder with same name already exists", looks up the existing folder and returns its ID.
+// parentID can be cache value "numericId,hash"; create API expects integer parentId in body.
+// If the API returns 422 "Folder with same name already exists", looks up the existing folder and returns its ID (or "id,hash").
 func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (string, error) {
+	parentIdForBody := folderIDForCreate(parentID)
 	var parent *string
-	if parentID != "" {
-		parent = &parentID
+	if parentIdForBody != "" {
+		parent = &parentIdForBody
 	}
 	body := CreateFolderRequest{Name: name, ParentID: parent}
 	raw, _ := json.Marshal(body)
@@ -285,7 +318,12 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Referer", c.base()+"/drive/folders/"+parentID)
+	// Match web app: Referer /drive for root, /drive/folders/{id} otherwise.
+	if parentIdForBody == "" {
+		req.Header.Set("Referer", c.base()+"/drive")
+	} else {
+		req.Header.Set("Referer", c.base()+"/drive/folders/"+folderIDForList(parentID))
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -295,8 +333,16 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 	bb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnprocessableEntity && strings.Contains(string(bb), "already exists") {
+			// Give the server a moment to make the folder visible in list (eventual consistency).
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
 			decodedWant := decodeSegment(name)
 			nameNorm := strings.TrimSpace(name)
+			// Server may return folder with "display" name (e.g. "14" when we created "_14").
+			displayWant := strings.TrimLeft(name, "_")
 			tryFind := func(entries []FileEntryResponse) string {
 				for _, e := range entries {
 					if e.Type != "folder" {
@@ -304,26 +350,59 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 					}
 					ename := e.Name.String()
 					en := strings.TrimSpace(ename)
-					if ename == name || en == nameNorm || decodeSegment(ename) == decodedWant ||
-						strings.EqualFold(en, nameNorm) || strings.EqualFold(decodeSegment(ename), decodedWant) {
+					decoded := decodeSegment(ename)
+					if ename == name || en == nameNorm || decoded == decodedWant ||
+						strings.EqualFold(en, nameNorm) || strings.EqualFold(decoded, decodedWant) ||
+						ename == displayWant || decoded == displayWant || strings.EqualFold(decoded, displayWant) {
+						// Return "id,hash" so cache can use id for create API and hash for list API.
+						if e.Hash != "" {
+							return e.ID.String() + "," + e.Hash
+						}
 						return e.ID.String()
+					}
+					// Numeric names: match "16280" vs 16280 or "016280" (API may return number or zero-padded).
+					if nameNorm != "" && en != "" {
+						na, naErr := strconv.ParseInt(strings.TrimLeft(nameNorm, "0"), 10, 64)
+						ea, eaErr := strconv.ParseInt(strings.TrimLeft(en, "0"), 10, 64)
+						if naErr == nil && eaErr == nil && na == ea {
+							if e.Hash != "" {
+								return e.ID.String() + "," + e.Hash
+							}
+							return e.ID.String()
+						}
+						decNa, decNaErr := strconv.ParseInt(strings.TrimLeft(decodedWant, "0"), 10, 64)
+						decEa, decEaErr := strconv.ParseInt(strings.TrimLeft(decoded, "0"), 10, 64)
+						if decNaErr == nil && decEaErr == nil && decNa == decEa {
+							if e.Hash != "" {
+								return e.ID.String() + "," + e.Hash
+							}
+							return e.ID.String()
+						}
 					}
 				}
 				return ""
 			}
-			for attempt := 0; attempt < 5; attempt++ {
+			// Retry ListAll up to 8 times with backoff (eventual consistency); then fall back to listPageByName.
+			var found string
+			for attempt := 0; attempt < 8; attempt++ {
 				entries, listErr := c.ListAll(ctx, parentID)
 				if listErr != nil {
-					if attempt == 0 {
-						return "", fmt.Errorf("create folder failed: %s (%s)", resp.Status, string(bb))
+					if attempt < 7 {
+						backoff := time.Duration(400*(1<<uint(attempt))) * time.Millisecond
+						select {
+						case <-ctx.Done():
+							return "", ctx.Err()
+						case <-time.After(backoff):
+						}
 					}
-					break
+					continue
 				}
 				if id := tryFind(entries); id != "" {
-					return id, nil
+					found = id
+					break
 				}
-				if attempt < 4 {
-					backoff := time.Duration(200*(1<<uint(attempt))) * time.Millisecond // 200, 400, 800, 1600 ms
+				if attempt < 7 {
+					backoff := time.Duration(400*(1<<uint(attempt))) * time.Millisecond
 					select {
 					case <-ctx.Done():
 						return "", ctx.Err()
@@ -331,25 +410,31 @@ func (c *Client) CreateFolder(ctx context.Context, name, parentID string) (strin
 					}
 				}
 			}
-			// Last resort: some APIs return more per page when requested (e.g. 1000).
-			if large, _, err := c.listPageByName(ctx, parentID, 1, 1000); err == nil {
-				if id := tryFind(large); id != "" {
+			if found != "" {
+				return found, nil
+			}
+			// Paginate by name so we can find the folder even in very large parents (e.g. years_1/all/14).
+			for page := 1; page <= 200; page++ {
+				byName, lastPage, err := c.listPageByName(ctx, parentID, page, 50)
+				if err != nil || len(byName) == 0 {
+					break
+				}
+				if id := tryFind(byName); id != "" {
 					return id, nil
+				}
+				if page >= lastPage || len(byName) < 50 {
+					break
 				}
 			}
-			// Fallback: list by updated_at desc (newest first). The "already exists" folder may
-			// appear in the first page when sorted by recent activity, even if name-sorted list is capped.
-			const defaultPageSize = 50
-			for page := 1; page <= 3; page++ {
-				byUpdated, _, err := c.ListPage(ctx, parentID, page, 0)
-				if err != nil || len(byUpdated) == 0 {
-					break
-				}
-				if id := tryFind(byUpdated); id != "" {
+			// Last chance: wait a bit and try ListAll once more (strong eventual consistency).
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(1500 * time.Millisecond):
+			}
+			if entries, listErr := c.ListAll(ctx, parentID); listErr == nil {
+				if id := tryFind(entries); id != "" {
 					return id, nil
-				}
-				if len(byUpdated) < defaultPageSize {
-					break
 				}
 			}
 		}
@@ -430,8 +515,13 @@ func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encod
 		decoded := decodeSegment(ename)
 		if ename == encoded || en == strings.TrimSpace(encoded) || decoded == originalName ||
 			strings.EqualFold(en, encoded) || strings.EqualFold(decoded, originalName) {
-			c.folderCache.Store(cacheKey, e.ID.String())
-			return e.ID.String(), false, nil
+			// Store "numericId,hash" so list API gets hash and create API gets integer.
+			cacheVal := e.ID.String()
+			if e.Hash != "" {
+				cacheVal = e.ID.String() + "," + e.Hash
+			}
+			c.folderCache.Store(cacheKey, cacheVal)
+			return cacheVal, false, nil
 		}
 	}
 
@@ -440,8 +530,26 @@ func (c *Client) ensureFolder(ctx context.Context, parentID, originalName, encod
 	if err != nil {
 		return "", false, err
 	}
-	c.folderCache.Store(cacheKey, id)
-	return id, true, nil
+	// Create returns "id" or "id,hash"; we may have only numeric id. Resolve hash so cache has "id,hash" for listing.
+	cacheVal := id
+	if strings.Index(id, ",") < 0 {
+		entries2, _ := c.ListAll(ctx, parentID)
+		for _, e := range entries2 {
+			if e.Type != "folder" {
+				continue
+			}
+			ename := e.Name.String()
+			decoded := decodeSegment(ename)
+			if ename == encoded || decoded == originalName || strings.TrimLeft(encoded, "_") == decoded || strings.TrimLeft(encoded, "_") == ename {
+				if e.Hash != "" {
+					cacheVal = id + "," + e.Hash
+				}
+				break
+			}
+		}
+	}
+	c.folderCache.Store(cacheKey, cacheVal)
+	return cacheVal, true, nil
 }
 
 // folderFortMinNameLen is FolderFort's minimum folder name length (API returns 422 if shorter).
@@ -511,7 +619,9 @@ func (c *Client) RootFolderID(ctx context.Context, baseName string) (string, err
 }
 
 // Presign gets a presigned S3 URL for upload.
+// parentID can be cache value "numericId,hash"; API expects integer in body.
 func (c *Client) Presign(ctx context.Context, filename, mime string, size int64, extension, parentID string) (*PresignResponse, error) {
+	parentIdForBody := folderIDForCreate(parentID)
 	body := PresignRequest{
 		TotalFileCount: 1,
 		Filename:       filename,
@@ -520,7 +630,7 @@ func (c *Client) Presign(ctx context.Context, filename, mime string, size int64,
 		Size:           size,
 		Extension:      extension,
 		WorkspaceID:    0,
-		ParentID:       parentID,
+		ParentID:       parentIdForBody,
 		RelativePath:   "",
 	}
 	raw, _ := json.Marshal(body)
@@ -528,7 +638,7 @@ func (c *Client) Presign(ctx context.Context, filename, mime string, size int64,
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Referer", c.base()+"/drive/folders/"+parentID)
+	req.Header.Set("Referer", c.base()+"/drive/folders/"+folderIDForList(parentID))
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -568,10 +678,12 @@ func (c *Client) UploadToS3(ctx context.Context, presignURL, acl, contentType st
 }
 
 // CreateEntry creates the file entry after S3 upload.
+// parentID can be cache value "numericId,hash"; API expects integer in body.
 func (c *Client) CreateEntry(ctx context.Context, parentID, clientMime, clientName, filename string, size int64, extension string) (string, error) {
+	parentIdForBody := folderIDForCreate(parentID)
 	body := CreateEntryRequest{
 		WorkspaceID:      0,
-		ParentID:         parentID,
+		ParentID:         parentIdForBody,
 		RelativePath:     "",
 		Disk:             "uploads",
 		ClientMime:       clientMime,
@@ -585,7 +697,7 @@ func (c *Client) CreateEntry(ctx context.Context, parentID, clientMime, clientNa
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Referer", c.base()+"/drive/folders/"+parentID)
+	req.Header.Set("Referer", c.base()+"/drive/folders/"+folderIDForList(parentID))
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -636,9 +748,23 @@ type ListRecursiveProgress func(deltaFiles, deltaFolders int)
 // Subfolders are listed concurrently (bounded by ListRecurseConcurrency) to speed up startup.
 // When progress is non-nil, it is called with (deltaFiles, deltaFolders) after the initial list and after each subfolder merge.
 func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, progress ListRecursiveProgress) (files map[string]FileEntryResponse, folders map[string]string, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	files = make(map[string]FileEntryResponse)
 	folders = make(map[string]string)
-	entries, err := c.ListAll(ctx, folderID)
+	// Limit concurrent folder listings. Important: don't hold the semaphore across recursion,
+	// otherwise parent goroutines can deadlock waiting for children to acquire a token.
+	entries, err := func() ([]FileEntryResponse, error) {
+		select {
+		case c.listRecurseSem <- struct{}{}:
+			// acquired
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-c.listRecurseSem }()
+		return c.ListAll(ctx, folderID)
+	}()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -679,13 +805,6 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, pro
 	for _, sf := range subfolders {
 		entry, fullPath := sf.entry, sf.fullPath
 		go func() {
-			select {
-			case c.listRecurseSem <- struct{}{}:
-				defer func() { <-c.listRecurseSem }()
-			case <-ctx.Done():
-				resultCh <- subResult{err: ctx.Err()}
-				return
-			}
 			folderID := entry.Hash
 			if folderID == "" {
 				folderID = entry.ID.String()
@@ -703,6 +822,7 @@ func (c *Client) ListRecursive(ctx context.Context, folderID, prefix string, pro
 		if r.err != nil {
 			if firstErr == nil {
 				firstErr = r.err
+				cancel()
 			}
 			continue
 		}
