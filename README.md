@@ -178,6 +178,8 @@ ffsync sync "C:\my-files" remote:backup
 | `ffsync sync <local> remote:path` | One-way sync; use `--delete` to remove remote-only files |
 | `ffsync check <local> remote:path` | Compare local and remote (by size) |
 | `ffsync space` | Show FolderFort storage usage (used / available) |
+| `ffsync star remote:path [remote:path ...]` | Star remote files or folders |
+| `ffsync unstar remote:path [remote:path ...]` | Unstar remote files or folders |
 | `ffsync empty-trash` | Permanently delete all items in FolderFort trash |
 | `ffsync selfupdate` | Update ffsync to the latest release from GitHub |
 
@@ -245,7 +247,7 @@ Clone and build as in [Building from source](#building-from-source). On Windows 
 | Path | Purpose |
 |------|---------|
 | `cmd/ffsync/` | Main entrypoint; wires up commands and flags |
-| `internal/cli/` | Cobra commands: `config`, `sync`, `copy`, `ls`, `mkdir`, `check`, `space`, `empty-trash`, `selfupdate`, `version` |
+| `internal/cli/` | Cobra commands: `config`, `sync`, `copy`, `ls`, `mkdir`, `check`, `space`, `star`, `unstar`, `empty-trash`, `selfupdate`, `version` |
 | `internal/config/` | Config file and env loading |
 | `internal/client/` | HTTP client and FolderFort API (login, presign, create entry) |
 | `internal/remote/` | Remote “filesystem” (list, mkdir, upload) |
