@@ -119,8 +119,10 @@ func runSelfupdate(cmd *cobra.Command, args []string) error {
 	// Use rename (not delete): ren exe .old then ren .new exe. Rename often works when del fails (e.g. AV lock).
 	oldName := filepath.Base(exePath) + ".old"
 	// Deferred cleanup: a background cmd sleeps then deletes .bat and .log so the batch can exit first (batch can't delete itself while running).
-	batchContent := fmt.Sprintf("@echo off\nsetlocal enabledelayedexpansion\nset PID=%d\nset LOG=%s\n(echo [%%date%% %%time%%] Update started, waiting for PID %%PID%%)>>%%LOG%%\n:wait\ntasklist /fi \"pid eq %%PID%%\" 2>nul | find \"%%PID%%\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\n(echo [%%date%% %%time%%] Process gone, delaying then replacing)>>%%LOG%%\nping -n 4 127.0.0.1 >nul\nset tries=0\n:renretry\nren %q %s 2>nul\nif exist %q (set /a tries+=1\nif !tries! geq 25 (echo [%%date%% %%time%%] ren old failed after 25 tries)>>%%LOG%% & exit /b 1\nping -n 2 127.0.0.1 >nul & goto renretry)\nren %q %s\n(echo [%%date%% %%time%%] Done - update applied. Run ffsync version to confirm.)>>%%LOG%%\ndel /f /q %q 2>nul\nstart /b cmd /c \"ping -n 2 127.0.0.1 >nul & del /f /q \\\"%s\\\" & del /f /q \\\"%s\\\"\"\nexit\n",
-		myPID, logPath, exePath, oldName, exePath, newPath, filepath.Base(exePath), exePath+".old", batchPath, logPath)
+	// Use %s for paths so backslashes are not doubled (Go's %q would produce C:\\... and break ren/del).
+	exeOld := exePath + ".old"
+	batchContent := fmt.Sprintf("@echo off\nsetlocal enabledelayedexpansion\nset PID=%d\nset LOG=%s\n(echo [%%date%% %%time%%] Update started, waiting for PID %%PID%%)>>%%LOG%%\n:wait\ntasklist /fi \"pid eq %%PID%%\" 2>nul | find \"%%PID%%\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\n(echo [%%date%% %%time%%] Process gone, delaying then replacing)>>%%LOG%%\nping -n 4 127.0.0.1 >nul\nset tries=0\n:renretry\nren \"%s\" %s 2>nul\nif exist \"%s\" (set /a tries+=1\nif !tries! geq 25 (echo [%%date%% %%time%%] ren old failed after 25 tries)>>%%LOG%% & exit /b 1\nping -n 2 127.0.0.1 >nul & goto renretry)\nren \"%s\" %s\n(echo [%%date%% %%time%%] Done - update applied. Run ffsync version to confirm.)>>%%LOG%%\ndel /f /q \"%s\" 2>nul\nstart /b cmd /c \"ping -n 2 127.0.0.1 >nul & del /f /q \\\"%s\\\" & del /f /q \\\"%s\\\"\"\nexit\n",
+		myPID, logPath, exePath, oldName, exePath, newPath, filepath.Base(exePath), exeOld, batchPath, logPath)
 	if err := os.WriteFile(batchPath, []byte(batchContent), 0600); err != nil {
 		os.Remove(newPath)
 		return fmt.Errorf("write update script: %w", err)
