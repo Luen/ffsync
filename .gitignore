@@ -33,4 +33,8 @@ go.work.sum
 *.lock
 na.folderfort.com.har
 ffsync-update.bat
+ffsync-update.log
 ffsync.exe.new
+ffsync.exe.old
+# Stray binary (e.g. go build -o ffsync on Unix or WSL)
+/ffsync

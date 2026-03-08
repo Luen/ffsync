@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -112,21 +111,27 @@ func runSelfupdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Windows: cannot replace running exe. Spawn a batch that waits for this process to exit, then replaces the binary.
+	// Embed PID in the batch file so we don't rely on start passing arguments (which often fails).
+	// Use "start /b cmd /c batch" so the batch runs in a process that is not our child and survives when we exit.
+	myPID := os.Getpid()
 	batchPath := filepath.Join(dir, "ffsync-update.bat")
-	// Batch receives our PID as %1; loops until that process is gone, then replaces the exe (no fixed delay)
-	batchContent := fmt.Sprintf("@echo off\n:wait\ntasklist /fi \"pid eq %%1\" 2>nul | find /i \"%%1\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\ndel %q\nren %q %s\nexit\n",
-		exePath, newPath, filepath.Base(exePath))
+	logPath := filepath.Join(dir, "ffsync-update.log")
+	// Use rename (not delete): ren exe .old then ren .new exe. Rename often works when del fails (e.g. AV lock).
+	oldName := filepath.Base(exePath) + ".old"
+	// Deferred cleanup: a background cmd sleeps then deletes .bat and .log so the batch can exit first (batch can't delete itself while running).
+	batchContent := fmt.Sprintf("@echo off\nsetlocal enabledelayedexpansion\nset PID=%d\nset LOG=%s\n(echo [%%date%% %%time%%] Update started, waiting for PID %%PID%%)>>%%LOG%%\n:wait\ntasklist /fi \"pid eq %%PID%%\" 2>nul | find \"%%PID%%\" >nul\nif not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\n(echo [%%date%% %%time%%] Process gone, delaying then replacing)>>%%LOG%%\nping -n 4 127.0.0.1 >nul\nset tries=0\n:renretry\nren %q %s 2>nul\nif exist %q (set /a tries+=1\nif !tries! geq 25 (echo [%%date%% %%time%%] ren old failed after 25 tries)>>%%LOG%% & exit /b 1\nping -n 2 127.0.0.1 >nul & goto renretry)\nren %q %s\n(echo [%%date%% %%time%%] Done - update applied. Run ffsync version to confirm.)>>%%LOG%%\ndel /f /q %q 2>nul\nstart /b cmd /c \"ping -n 2 127.0.0.1 >nul & del /f /q \\\"%s\\\" & del /f /q \\\"%s\\\"\"\nexit\n",
+		myPID, logPath, exePath, oldName, exePath, newPath, filepath.Base(exePath), exePath+".old", batchPath, logPath)
 	if err := os.WriteFile(batchPath, []byte(batchContent), 0600); err != nil {
 		os.Remove(newPath)
 		return fmt.Errorf("write update script: %w", err)
 	}
-	myPID := os.Getpid()
-	if err := runDetached(batchPath, fmt.Sprint(myPID)); err != nil {
+	if err := runDetached(batchPath); err != nil {
 		os.Remove(newPath)
 		os.Remove(batchPath)
 		return fmt.Errorf("start update script: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Update will apply when this process exits. Run 'ffsync version' to confirm %s.\n", rel.TagName)
+	fmt.Fprintf(os.Stderr, "If it did not apply, run the update script in this directory or check ffsync-update.log.\n")
 	return nil
 }
 
@@ -172,9 +177,10 @@ func downloadFile(url, path string) error {
 	return err
 }
 
-// runDetached runs the batch script in a minimized window with the given args (e.g. PID to wait for).
-func runDetached(batchPath string, args ...string) error {
-	// /min = minimized window so the batch survives closing the parent terminal
-	cmd := exec.Command("cmd", append([]string{"/c", "start", "/min", "", batchPath}, args...)...)
-	return cmd.Start()
+// runDetached runs the batch script so it survives after we exit. On Windows see selfupdate_windows.go.
+func runDetached(batchPath string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	return runDetachedWindows(batchPath)
 }
