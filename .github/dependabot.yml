@@ -1,0 +1,9 @@
+version: 2
+updates:
+
+  # Monthly checks for GitHub Actions version bumps
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    target-branch: "main"
