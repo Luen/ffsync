@@ -7,3 +7,10 @@ updates:
     schedule:
       interval: "monthly"
     target-branch: "main"
+
+  # Monthly checks for Go modules
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    target-branch: "main"
