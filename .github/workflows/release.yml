@@ -75,7 +75,7 @@ jobs:
                   GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ffsync-windows-amd64.exe ./cmd/ffsync
 
             - name: Create Release
-              uses: softprops/action-gh-release@v2
+              uses: softprops/action-gh-release@v3
               with:
                   files: dist/*
                   body_path: release_notes.md
